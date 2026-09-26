@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; manifest-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex, nofollow">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#3B1C63">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Wochenkorb">
+<meta name="description" content="Weekly ALDI SÜD and LIDL deals, a budgeted shopping list and deal recipes for Bolanden and Kaiserslautern.">
+<title>Wochenkorb</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Nunito:wght@500;600;700;800&family=DM+Mono:wght@500&display=swap">
+<link rel="stylesheet" href="style.css">
+<style>html,body{margin:0} :root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)} img{max-width:100%} [hidden]{display:none!important}</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="topin">
+    <div class="logo"><i aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9h18l-2 11H5z"/><path d="M8 9l3-6M16 9l-3-6"/><path d="M9 13v4M15 13v4M12 13v4"/></svg></i>Wochenkorb</div>
+    <nav class="tabs-desk" id="tabsDesk" aria-label="Sections"></nav>
+    <button class="loc" id="locBtn" type="button" aria-label="Change your location"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg><span id="locName">Bolanden</span></button>
+  </div>
+</header>
+
+<main id="app" aria-live="polite"></main>
+
+<nav class="nav" aria-label="Sections"><div class="navin" id="tabsMob"></div></nav>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<div id="layer"></div>
+
+<noscript><p style="padding:24px;font-family:system-ui">Wochenkorb needs JavaScript switched on.</p></noscript>
+<script src="data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
