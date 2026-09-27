@@ -313,3 +313,13 @@ details[open].card>summary svg{transform:rotate(180deg)}
 .legend i{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:5px;vertical-align:-1px}
 footer.foot{font-size:12.5px;color:var(--muted);display:flex;flex-direction:column;gap:6px;padding-top:6px;border-top:1px solid var(--line)}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+
+/* v2 additions */
+.notice.info{background:var(--sky-soft);color:var(--sky-ink)}
+.btn.wa{background:#1FAF55;color:#fff;border-color:#1FAF55}
+.pickrow{display:flex;gap:12px;align-items:center;padding:12px;text-align:left;width:100%}
+#langBtn{margin-left:8px;padding:6px 12px;font-family:var(--mono);letter-spacing:.04em}
+#locBtn{margin-left:auto}
+.sheetbody>.ico{margin-bottom:-6px}
+@media (max-width:430px){.logo{font-size:18px;gap:8px}.logo i{width:32px;height:32px}.topin{gap:8px}.loc{padding:6px 10px 6px 7px;font-size:13px}#langBtn{margin-left:4px;padding:6px 9px}}
+@media (max-width:350px){#locName{display:none}}

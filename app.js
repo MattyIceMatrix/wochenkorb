@@ -115,7 +115,9 @@ const I = {
   "Coffee & tea":'<path d="M4 9h13v4a6 6 0 0 1-6 6h-1a6 6 0 0 1-6-6z"/><path d="M17 11h1.5a2.5 2.5 0 0 1 0 5H17"/><path d="M8 3v3M12 3v3"/>',
   Breakfast:'<path d="M3 11h18a9 9 0 0 1-18 0z"/><path d="M8 7c0-2 2-2 2-4M14 7c0-2 2-2 2-4"/>',
   Household:'<rect x="4" y="4" width="11" height="16" rx="2"/><circle cx="9.5" cy="12" r="2.5"/><path d="M15 8h5v8h-5"/>',
-  Added:'<path d="M12 5v14M5 12h14"/>'
+  Added:'<path d="M12 5v14M5 12h14"/>',
+  send:'<path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4z"/>',
+  chat:'<path d="M21 12a8.5 8.5 0 0 1-12.6 7.4L3 21l1.7-5.2A8.5 8.5 0 1 1 21 12z"/>'
 };
 const svg = (k,extra) => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"'+(extra||"")+'>'+(I[k]||I.Pantry)+'</svg>';
 const CATCOL = {Meat:"tomato",Fish:"sky",Dairy:"sky",Cheese:"mango",Produce:"basil",Bakery:"mango",Pantry:"plum",Frozen:"sky",Drinks:"basil",Snacks:"tomato","Coffee & tea":"plum",Breakfast:"mango",Household:"plum",Added:"plum"};
@@ -124,7 +126,8 @@ const HERO_COL = {tomato:["#F2482B","#FFB020","#8E1F0E"],mango:["#F59E0B","#F248
 /* ---------------- state: per-device, validated on load ---------------- */
 const KEY = "wochenkorb.v2";
 const DEFAULT_FAVS = ["chicken","Hackfleisch","pasta","rice","potatoes","eggs","milk","cheese","bread","broccoli","bananas","apples","yogurt","coffee"];
-function freshState(){ return {v:2, week:META.validFrom, favorites:DEFAULT_FAVS.slice(), budget:160, big:true, home:"Bolanden",
+const DEFAULT_LANG = (()=>{ try{ return /^de/i.test(navigator.language||"") ? "de" : "en"; }catch(e){ return "en"; } })();
+function freshState(){ return {v:2, lang:DEFAULT_LANG, week:META.validFrom, favorites:DEFAULT_FAVS.slice(), budget:160, big:true, home:"Bolanden",
   items:{}, custom:[], checked:[], storePick:{}, menu:{}, tab:"home", seeded:false}; }
 function sanitize(s){
   const d = freshState(); if(!s || typeof s!=="object") return d;
@@ -132,6 +135,7 @@ function sanitize(s){
   if(Array.isArray(s.favorites)) d.favorites = s.favorites.map(x=>str(x,40)).filter(Boolean).slice(0,60);
   if(typeof s.budget==="number" && isFinite(s.budget)) d.budget = clamp(Math.round(s.budget),0,2000);
   d.big = !!s.big;
+  if(s.lang==="de"||s.lang==="en") d.lang = s.lang;
   if(s.home==="Kaiserslautern"||s.home==="Bolanden") d.home = s.home;
   if(["home","deals","list","recipes","stores"].includes(s.tab)) d.tab = s.tab;
   d.seeded = !!s.seeded;
@@ -205,47 +209,189 @@ function haversine(a,b){ const R=6371, t=x=>x*Math.PI/180; const dLa=t(b.lat-a.l
 function home(){ return DB.get(S.home); }
 function storeStatus(st){
   const n=berlinNow(); const toM=s=>{const [h,m]=s.split(":");return +h*60+ +m;};
-  if(HOLIDAYS[n.date]) return {open:false,txt:"Closed today (holiday)"};
-  if(n.wd==="Sun") return {open:false,txt:"Closed Sunday · opens Mon "+st.open};
+  if(HOLIDAYS[n.date]) return {open:false,code:"st_holiday"};
+  if(n.wd==="Sun") return {open:false,code:"st_sunday",time:st.open};
   const o=toM(st.open), c=toM(st.close);
-  if(n.mins<o) return {open:false,txt:"Opens "+st.open};
-  if(n.mins>=c) return {open:false,txt:"Closed · opens "+st.open};
-  if(c-n.mins<=45) return {open:true,soon:true,txt:"Closes "+st.close};
-  return {open:true,txt:"Open until "+st.close};
+  if(n.mins<o) return {open:false,code:"st_opens",time:st.open};
+  if(n.mins>=c) return {open:false,code:"st_closed",time:st.open};
+  if(c-n.mins<=45) return {open:true,soon:true,code:"st_closes",time:st.close};
+  return {open:true,code:"st_open",time:st.close};
 }
 function storesNear(){ const h=home();
   return DB.from("stores").all().map(s=>({s,km:haversine(h,s)})).sort((a,b)=>a.km-b.km); }
 function nearest(chain){ return storesNear().find(x=>x.s.chain===chain); }
 function mapsUrl(st){ return "https://www.google.com/maps/search/?api=1&query="+encodeURIComponent(st.chain+" "+st.street+", "+st.zip+" "+st.town)+"&query_place_id="+encodeURIComponent(st.placeId); }
 
+
+/* ---------------- language ---------------- */
+const STR = {
+  en:{
+    tab_home:"Home", tab_deals:"Deals", tab_list:"List", tab_recipes:"Recipes", tab_stores:"Stores",
+    lang_btn:"DE", lang_aria:"Auf Deutsch umschalten", loc_aria:"Change your location",
+    toast_added:"Added to your list", toast_loc:"Location: {x}",
+    hero_deals:"{n} deals", hero_rest:"this week at ALDI & LIDL",
+    hero_list:"Your list is {total} for {n} items.", hero_left:"{left} left in your {b} budget.", hero_over:"That is {over} over budget.",
+    open_list:"Open my list", deal_recipes:"Deal recipes", of_budget:"of budget", budget_used:"{p}% of budget used",
+    deals_for_you:"Deals for you", see_all:"See all {n}",
+    dinners_title:"This week's dinners", dinners_sub:"{n} of 7 planned. Tap a day to choose a recipe.",
+    shop_menu:"Shop for this menu", fill_week:"Fill the week for me", today:"today", plan_dinner:"+ Plan dinner", tap_plan:"tap to plan",
+    nearest:"Nearest stores", all_stores:"All stores",
+    hol_is:"{day} {date} is {name}", hol_tail:"Stores are closed that day, so plan your shopping around it.",
+    stale:"These deals ended on {date}. New deals arrive Monday morning; your list still works with shelf prices.",
+    offline:"You're offline. Showing the deals saved on this phone.",
+    valid:"valid Mo {from} – Sa {to}", weekly_deals:"Weekly deals", search_ph:"Search: cheese, Käse, pasta, Kaffee…", search_lbl:"Search deals",
+    all:"All", sort_price:"Cheapest first", sort_aisle:"By aisle", sort_name:"A–Z", n_deals:"{n} deals", store:"Store", category:"Category",
+    no_deals:"No deals match. Try another word or clear the filters.",
+    one_less:"One less", one_more:"One more", add_x:"Add {x} to list",
+    household:"Household of 4", list_title:"Shopping list", copy:"Copy", share_list:"Send list", remove_ticked:"Remove {n} ticked",
+    total:"Total", on_budget:"On budget", near_budget:"Close to budget", over_budget:"Over budget", budget:"Budget", left:"Left", over_by:"Over by", on_sale:"On sale", packs:"packs",
+    fav_budget:"Favorites & budget", fav_label:"Favorite groceries", fav_ph:"Add, then Enter (English or German)",
+    no_price_for:"No price for: {x}. Add it below with the price you see.", all_priced:"Every favorite has a price this week.",
+    rebuild:"Rebuild list from favorites", merge:"Add missing favorites", weekly_budget:"Weekly budget",
+    big:"Big appetites", big_sub:"Four near-grown adults, +25% on bulk items",
+    items_n:"{n} items", nothing_here:"Nothing to buy here yet.", got_x:"Got {x}",
+    angebot:"ANGEBOT", your_price:"your price", shelf:"shelf price", other_store:"Buy at the other store", subtotal:"Subtotal",
+    add_else:"Add something else", add_name_ph:"Item, e.g. Avocados", add_price_ph:"Price €", add:"Add",
+    rec_eyebrow:"Built from {w} deals · serves 4", rec_title:"Deal recipes",
+    f_all:"All", f_dinner:"Dinner", f_breakfast:"Breakfast", f_quick:"Under 30 min", f_deals:"Most deals",
+    deals_n:"{n} deals", deal_1:"1 deal", per_person:"{x} per person", in_week:"In week", add_week:"+ Week", recipe:"Recipe",
+    meal_Dinner:"Dinner", meal_Breakfast:"Breakfast", lvl_Easy:"Easy", lvl_Medium:"Medium", min:"min",
+    stores_eyebrow:"Hours Mo–Sa · Sundays and holidays closed", stores_title:"Stores near you", your_loc:"Your location",
+    km_from:"km from {x}", directions:"Directions", map_aria:"Map of stores around Bolanden and Kaiserslautern",
+    stores_note:"Weekly Prospekt deals are the same across ALDI SÜD and LIDL stores in the region, but stock varies by branch. Bolanden has no discounter of its own; the nearest are in Kirchheimbolanden.",
+    st_holiday:"Closed today (holiday)", st_sunday:"Closed Sunday · opens Mon {t}", st_opens:"Opens {t}", st_closed:"Closed · opens {t}", st_closes:"Closes {t}", st_open:"Open until {t}",
+    foot1:"Deal prices from the {w} ALDI SÜD and LIDL Prospekte (updated {d}). \"Shelf price\" items use typical everyday discounter prices and are estimates. Fresh meat and produce deals are published on Monday.",
+    foot2:"Check the originals:", foot3:"Your list stays on this phone. Nothing is sent anywhere unless you send it.",
+    close:"Close", start_cooking:"Start cooking", ing_to_list:"Add ingredients to list", ingredients:"Ingredients", method:"Method",
+    ing_note:"Red dot = on sale this week. Cost counts only the share of each pack the recipe uses.", pantry:"from your pantry",
+    serves4:"Serves 4", total_x:"{x} total", per_x:"{x} / person", in_menu:"In this week's menu", add_menu:"+ Add to this week's menu",
+    pick_dinner:"Pick a dinner", clear_day:"Clear {d}",
+    cook_mode:"Cook mode", leave_cook:"Leave cook mode", step_of:"Step {i} of {n}", start_timer:"Start timer", pause:"Pause", reset_timer:"Reset timer",
+    back:"Back", next:"Next step", done:"Done, enjoy!",
+    t_moved:"Moved to {x}", t_ticked:"Ticked items removed", t_rebuilt:"List rebuilt from favorites", t_favs:"Favorites added",
+    t_day:"{d}: {x}", t_menu_n:"{n} ingredients added for the menu", t_menu_0:"Everything for the menu is already on your list",
+    t_rec_n:"{n} ingredients added", t_rec_0:"All ingredients already on your list", t_week_rm:"Removed from the week", t_week_full:"The week is full. Clear a day on Home first.",
+    t_planned:"Planned for {d}", t_auto:"7 dinners planned. Tap a day to change it.", t_copied:"List copied. Paste it into WhatsApp or Notes.", t_copy_fail:"Copy was blocked on this device",
+    t_more:"Quantities increased", t_normal:"Normal quantities", t_added:"Added {x}", t_noprice:"No price found for {x}", t_price_range:"Enter a price between 0 and 500 €", t_full:"Your list is full",
+    t_link:"Link copied. Paste it into WhatsApp.",
+    share_title:"Send your list", share_sub:"Send it as a link: it opens in Wochenkorb on the other phone with every item, amount and the week's dinners.",
+    share_native:"Share…", share_wa:"Send with WhatsApp", share_copy_link:"Copy link", share_copy_text:"Copy as plain text",
+    share_msg:"Our shopping list for this week ({n} items, {total}). Open it in Wochenkorb:",
+    imp_title:"A shopping list was shared with you", imp_sub:"{n} items · {total}{menu}", imp_menu:" · {n} dinners planned",
+    imp_replace:"Use this list", imp_merge:"Add to my list", imp_ignore:"Ignore", imp_old:"This list is from an older week. Items that are no longer on sale use shelf prices.",
+    t_imported:"List loaded", t_merged:"Items added to your list",
+    copy_head:"Shopping list", copy_total:"Total"
+  },
+  de:{
+    tab_home:"Start", tab_deals:"Angebote", tab_list:"Liste", tab_recipes:"Rezepte", tab_stores:"Märkte",
+    lang_btn:"EN", lang_aria:"Switch to English", loc_aria:"Standort wechseln",
+    toast_added:"Zur Liste hinzugefügt", toast_loc:"Standort: {x}",
+    hero_deals:"{n} Angebote", hero_rest:"diese Woche bei ALDI & LIDL",
+    hero_list:"Deine Liste kostet {total} für {n} Artikel.", hero_left:"Noch {left} von {b} Budget übrig.", hero_over:"Das sind {over} über Budget.",
+    open_list:"Meine Liste", deal_recipes:"Angebots-Rezepte", of_budget:"vom Budget", budget_used:"{p} % des Budgets verbraucht",
+    deals_for_you:"Angebote für dich", see_all:"Alle {n} ansehen",
+    dinners_title:"Abendessen dieser Woche", dinners_sub:"{n} von 7 geplant. Tippe auf einen Tag, um ein Rezept zu wählen.",
+    shop_menu:"Für dieses Menü einkaufen", fill_week:"Woche für mich planen", today:"heute", plan_dinner:"+ Abendessen planen", tap_plan:"zum Planen tippen",
+    nearest:"Nächste Märkte", all_stores:"Alle Märkte",
+    hol_is:"{day} {date} ist {name}", hol_tail:"Die Märkte sind an diesem Tag geschlossen, also Einkauf entsprechend planen.",
+    stale:"Diese Angebote endeten am {date}. Neue Angebote kommen Montagfrüh; deine Liste funktioniert weiter mit Regalpreisen.",
+    offline:"Du bist offline. Es werden die auf diesem Handy gespeicherten Angebote angezeigt.",
+    valid:"gültig Mo {from} – Sa {to}", weekly_deals:"Wochenangebote", search_ph:"Suchen: Käse, Nudeln, Kaffee…", search_lbl:"Angebote suchen",
+    all:"Alle", sort_price:"Günstigste zuerst", sort_aisle:"Nach Regal", sort_name:"A–Z", n_deals:"{n} Angebote", store:"Markt", category:"Kategorie",
+    no_deals:"Keine Treffer. Anderes Wort versuchen oder Filter zurücksetzen.",
+    one_less:"Eins weniger", one_more:"Eins mehr", add_x:"{x} zur Liste hinzufügen",
+    household:"4-Personen-Haushalt", list_title:"Einkaufsliste", copy:"Kopieren", share_list:"Liste senden", remove_ticked:"{n} abgehakte entfernen",
+    total:"Gesamt", on_budget:"Im Budget", near_budget:"Fast am Budget", over_budget:"Über Budget", budget:"Budget", left:"Übrig", over_by:"Drüber", on_sale:"Im Angebot", packs:"Packungen",
+    fav_budget:"Favoriten & Budget", fav_label:"Lieblingsprodukte", fav_ph:"Eingeben, dann Enter (Deutsch oder Englisch)",
+    no_price_for:"Kein Preis für: {x}. Unten mit dem Preis aus dem Markt hinzufügen.", all_priced:"Alle Favoriten haben diese Woche einen Preis.",
+    rebuild:"Liste aus Favoriten neu erstellen", merge:"Fehlende Favoriten hinzufügen", weekly_budget:"Wochenbudget",
+    big:"Großer Hunger", big_sub:"Vier fast erwachsene Esser, +25 % bei Grundnahrungsmitteln",
+    items_n:"{n} Artikel", nothing_here:"Hier noch nichts zu kaufen.", got_x:"{x} erledigt",
+    angebot:"ANGEBOT", your_price:"dein Preis", shelf:"Regalpreis", other_store:"Im anderen Markt kaufen", subtotal:"Zwischensumme",
+    add_else:"Etwas anderes hinzufügen", add_name_ph:"Artikel, z. B. Avocados", add_price_ph:"Preis €", add:"Hinzufügen",
+    rec_eyebrow:"Aus den Angeboten {w} · für 4 Personen", rec_title:"Angebots-Rezepte",
+    f_all:"Alle", f_dinner:"Abendessen", f_breakfast:"Frühstück", f_quick:"Unter 30 Min.", f_deals:"Meiste Angebote",
+    deals_n:"{n} Angebote", deal_1:"1 Angebot", per_person:"{x} pro Person", in_week:"In der Woche", add_week:"+ Woche", recipe:"Rezept",
+    meal_Dinner:"Abendessen", meal_Breakfast:"Frühstück", lvl_Easy:"Einfach", lvl_Medium:"Mittel", min:"Min.",
+    stores_eyebrow:"Mo–Sa geöffnet · Sonn- und Feiertage geschlossen", stores_title:"Märkte in deiner Nähe", your_loc:"Dein Standort",
+    km_from:"km von {x}", directions:"Route", map_aria:"Karte der Märkte um Bolanden und Kaiserslautern",
+    stores_note:"Die Prospekt-Angebote gelten in allen ALDI-SÜD- und LIDL-Filialen der Region, der Bestand kann aber je Filiale abweichen. Bolanden hat keinen eigenen Discounter; die nächsten sind in Kirchheimbolanden.",
+    st_holiday:"Heute geschlossen (Feiertag)", st_sunday:"Sonntag geschlossen · Mo ab {t}", st_opens:"Öffnet {t}", st_closed:"Geschlossen · öffnet {t}", st_closes:"Schließt {t}", st_open:"Geöffnet bis {t}",
+    foot1:"Angebotspreise aus den Prospekten {w} von ALDI SÜD und LIDL (Stand {d}). Artikel mit „Regalpreis“ nutzen übliche Discounter-Preise und sind Schätzungen. Frische Fleisch- und Obst-Angebote erscheinen montags.",
+    foot2:"Originale ansehen:", foot3:"Deine Liste bleibt auf diesem Handy. Nichts wird verschickt, außer du sendest sie.",
+    close:"Schließen", start_cooking:"Kochen starten", ing_to_list:"Zutaten auf die Liste", ingredients:"Zutaten", method:"Zubereitung",
+    ing_note:"Roter Punkt = diese Woche im Angebot. Die Kosten zählen nur den Anteil jeder Packung, den das Rezept braucht.", pantry:"aus dem Vorrat",
+    serves4:"Für 4", total_x:"{x} gesamt", per_x:"{x} / Person", in_menu:"Im Wochenmenü", add_menu:"+ Zum Wochenmenü",
+    pick_dinner:"Abendessen wählen", clear_day:"{d} leeren",
+    cook_mode:"Kochmodus", leave_cook:"Kochmodus beenden", step_of:"Schritt {i} von {n}", start_timer:"Timer starten", pause:"Pause", reset_timer:"Timer zurücksetzen",
+    back:"Zurück", next:"Nächster Schritt", done:"Fertig, guten Appetit!",
+    t_moved:"Verschoben zu {x}", t_ticked:"Abgehakte Artikel entfernt", t_rebuilt:"Liste aus Favoriten neu erstellt", t_favs:"Favoriten hinzugefügt",
+    t_day:"{d}: {x}", t_menu_n:"{n} Zutaten für das Menü hinzugefügt", t_menu_0:"Alles für das Menü steht schon auf der Liste",
+    t_rec_n:"{n} Zutaten hinzugefügt", t_rec_0:"Alle Zutaten stehen schon auf der Liste", t_week_rm:"Aus der Woche entfernt", t_week_full:"Die Woche ist voll. Leere zuerst einen Tag auf der Startseite.",
+    t_planned:"Geplant für {d}", t_auto:"7 Abendessen geplant. Tippe auf einen Tag, um es zu ändern.", t_copied:"Liste kopiert. In WhatsApp oder Notizen einfügen.", t_copy_fail:"Kopieren ist auf diesem Gerät blockiert",
+    t_more:"Mengen erhöht", t_normal:"Normale Mengen", t_added:"{x} hinzugefügt", t_noprice:"Kein Preis gefunden für {x}", t_price_range:"Preis zwischen 0 und 500 € eingeben", t_full:"Deine Liste ist voll",
+    t_link:"Link kopiert. In WhatsApp einfügen.",
+    share_title:"Liste senden", share_sub:"Als Link senden: Er öffnet sich in Wochenkorb auf dem anderen Handy, mit allen Artikeln, Mengen und den Abendessen der Woche.",
+    share_native:"Teilen…", share_wa:"Mit WhatsApp senden", share_copy_link:"Link kopieren", share_copy_text:"Als Text kopieren",
+    share_msg:"Unsere Einkaufsliste für diese Woche ({n} Artikel, {total}). In Wochenkorb öffnen:",
+    imp_title:"Dir wurde eine Einkaufsliste geschickt", imp_sub:"{n} Artikel · {total}{menu}", imp_menu:" · {n} Abendessen geplant",
+    imp_replace:"Diese Liste nutzen", imp_merge:"Zu meiner Liste hinzufügen", imp_ignore:"Ignorieren", imp_old:"Diese Liste ist aus einer älteren Woche. Artikel, die nicht mehr im Angebot sind, nutzen Regalpreise.",
+    t_imported:"Liste geladen", t_merged:"Artikel zu deiner Liste hinzugefügt",
+    copy_head:"Einkaufsliste", copy_total:"Gesamt"
+  }
+};
+const CAT_DE = {Meat:"Fleisch",Fish:"Fisch",Dairy:"Molkerei",Cheese:"Käse",Produce:"Obst & Gemüse",Bakery:"Backwaren",Pantry:"Vorrat",Frozen:"Tiefkühl",Drinks:"Getränke",Snacks:"Süßes & Snacks","Coffee & tea":"Kaffee & Tee",Breakfast:"Frühstück",Household:"Haushalt",Added:"Selbst hinzugefügt"};
+const DAYS_DE = ["Mo","Di","Mi","Do","Fr","Sa","So"];
+const DAYS_EN = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+const HOL_EN = {"Tag der Deutschen Einheit":"German Unity Day","Allerheiligen":"All Saints' Day","1. Weihnachtstag":"Christmas Day","2. Weihnachtstag":"Boxing Day","Neujahr":"New Year's Day","Karfreitag":"Good Friday","Ostermontag":"Easter Monday","Tag der Arbeit":"Labour Day","Christi Himmelfahrt":"Ascension Day","Pfingstmontag":"Whit Monday","Fronleichnam":"Corpus Christi"};
+const de = () => S.lang==="de";
+function t(k, v){ let s=(STR[S.lang]||STR.en)[k]; if(s==null) s=STR.en[k]; if(s==null) return k;
+  if(v) s=s.replace(/\{(\w+)\}/g,(m,x)=>v[x]!=null?String(v[x]):m); return s; }
+const cat = c => de() ? (CAT_DE[c]||c) : c;
+const dayN = i => (de()?DAYS_DE:DAYS_EN)[i];
+const holN = n => de() ? n : (HOL_EN[n]||n);
+const rName = r => de() ? (r.de||r.name) : r.name;
+const rAlt = r => de() ? r.name : (r.de||"");
+const rBlurb = r => de() && r.deBlurb ? r.deBlurb : r.blurb;
+const rIngLabel = (r,i) => de() && r.deIng && r.deIng[i] ? r.deIng[i] : r.ing[i][1];
+const rStep = (r,i) => de() && r.deSteps && r.deSteps[i] ? [r.deSteps[i][0], r.deSteps[i][1], r.steps[i][2]] : r.steps[i];
+const km = x => de() ? x.toFixed(1).replace(".",",") : x.toFixed(1);
+
 /* ---------------- UI plumbing ---------------- */
-const TABS=[["home","Home","home"],["deals","Deals","tag"],["list","List","list"],["recipes","Recipes","pot"],["stores","Stores","pin"]];
+const TABS=[["home","tab_home","home"],["deals","tab_deals","tag"],["list","tab_list","list"],["recipes","tab_recipes","pot"],["stores","tab_stores","pin"]];
 function renderNav(){
   const L=lines(); const cnt=L.filter(l=>!S.checked.includes(l.id)).length;
-  $("#tabsMob").innerHTML = TABS.map(([id,lab,ic])=>'<button type="button" data-tab="'+id+'"'+(S.tab===id?' aria-current="page"':'')+'>'+svg(ic)+esc(lab)+(id==="list"&&cnt?'<span class="badge">'+cnt+'</span>':'')+'</button>').join("");
-  $("#tabsDesk").innerHTML = TABS.map(([id,lab])=>'<button type="button" data-tab="'+id+'"'+(S.tab===id?' aria-current="page"':'')+'>'+esc(lab)+(id==="list"&&cnt?' · '+cnt:'')+'</button>').join("");
+  $("#tabsMob").innerHTML = TABS.map(([id,lab,ic])=>'<button type="button" data-tab="'+id+'"'+(S.tab===id?' aria-current="page"':'')+'>'+svg(ic)+esc(t(lab))+(id==="list"&&cnt?'<span class="badge">'+cnt+'</span>':'')+'</button>').join("");
+  $("#tabsDesk").innerHTML = TABS.map(([id,lab])=>'<button type="button" data-tab="'+id+'"'+(S.tab===id?' aria-current="page"':'')+'>'+esc(t(lab))+(id==="list"&&cnt?' · '+cnt:'')+'</button>').join("");
   $("#locName").textContent = S.home;
+  $("#locBtn").setAttribute("aria-label", t("loc_aria"));
+  const lb=$("#langBtn"); if(lb){ lb.textContent=t("lang_btn"); lb.setAttribute("aria-label",t("lang_aria")); }
+  document.documentElement.lang = S.lang;
 }
 let toastT=null;
-function toast(msg){ const t=$("#toast"); t.textContent=msg; t.classList.add("show"); clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove("show"),1900); }
-function go(tab){ if(!TABS.some(t=>t[0]===tab)) return; S.tab=tab; save(); render(); window.scrollTo({top:0,behavior:"instant"in window?"instant":"auto"}); }
+function toast(msg){ const el=$("#toast"); el.textContent=msg; el.classList.add("show"); clearTimeout(toastT); toastT=setTimeout(()=>el.classList.remove("show"),2100); }
+function go(tab){ if(!TABS.some(x=>x[0]===tab)) return; S.tab=tab; save(); render(); window.scrollTo(0,0); }
 
 /* ---------------- views ---------------- */
-let dealQ="", dealStore="All", dealCat="All", dealSort="price", recFilter="All";
+let dealQ="", dealStore="All", dealCat="All", dealSort="price", recFilter="f_all";
 
-function holidayNotice(){
+function notices(){
+  let out="";
+  if(typeof navigator!=="undefined" && navigator.onLine===false) out+='<div class="notice info" role="status">'+svg("alert")+'<div>'+esc(t("offline"))+'</div></div>';
+  const today=berlinNow().date;
+  if(today>META.validTo) out+='<div class="notice" role="note">'+svg("clock")+'<div>'+esc(t("stale",{date:fmtD(META.validTo)}))+'</div></div>';
   const days = Object.entries(HOLIDAYS).filter(([d])=>d>=META.validFrom && d<=META.validTo);
-  if(!days.length) return "";
-  return '<div class="notice" role="note">'+svg("alert")+'<div><b>'+esc(days.map(([d,n])=>DAYS[(new Date(d+"T12:00:00Z").getUTCDay()+6)%7]+" "+fmtD(d)+" is "+n).join(", "))+'.</b> Stores are closed that day, so plan your shopping around it.</div></div>';
+  if(days.length) out+='<div class="notice" role="note">'+svg("alert")+'<div><b>'+esc(days.map(([d,n])=>t("hol_is",{day:dayN((new Date(d+"T12:00:00Z").getUTCDay()+6)%7),date:fmtD(d),name:holN(n)})).join(", "))+'.</b> '+esc(t("hol_tail"))+'</div></div>';
+  return out;
 }
 function dealCard(o){
   const inList=!!S.items[o.id]; const col=CATCOL[o.category]||"plum";
   return '<article class="card deal'+(inList?' in':'')+'">'+
-    '<div class="dtop"><span class="ico c-'+col+'">'+svg(o.category)+'</span><span class="store-tag '+esc(o.store)+'">'+esc(o.store)+'</span></div>'+
+    '<div class="dtop"><span class="ico c-'+col+'" title="'+esc(cat(o.category))+'">'+svg(o.category)+'</span><span class="store-tag '+esc(o.store)+'">'+esc(o.store)+'</span></div>'+
     '<span class="price">'+eur(o.price)+'</span><span class="nm">'+esc(o.name)+'</span>'+
     '<div class="dfoot"><span class="sz">'+esc(o.size)+'</span>'+
-    (inList?'<span class="step"><button type="button" data-act="dec" data-id="'+esc(o.id)+'" aria-label="One less">−</button><span>'+S.items[o.id]+'</span><button type="button" data-act="inc" data-id="'+esc(o.id)+'" aria-label="One more">+</button></span>'
-           :'<button type="button" class="addbtn" data-act="add" data-id="'+esc(o.id)+'" aria-label="Add '+esc(o.name)+' to list">'+svg("plus")+'</button>')+
+    (inList?'<span class="step"><button type="button" data-act="dec" data-id="'+esc(o.id)+'" aria-label="'+esc(t("one_less"))+'">−</button><span>'+S.items[o.id]+'</span><button type="button" data-act="inc" data-id="'+esc(o.id)+'" aria-label="'+esc(t("one_more"))+'">+</button></span>'
+           :'<button type="button" class="addbtn" data-act="add" data-id="'+esc(o.id)+'" aria-label="'+esc(t("add_x",{x:o.name}))+'">'+svg("plus")+'</button>')+
     '</div></article>';
 }
 function viewHome(){
@@ -253,48 +399,49 @@ function viewHome(){
   const pct = T.b? clamp(T.total/T.b,0,1):0; const C=2*Math.PI*52;
   const ringCol = T.state==="bad"?"#FF6A4F":T.state==="warn"?"#FFB020":"#35C77F";
   const picks = favMatches().filter(x=>x.m&&isOffer(x.m.row)).map(x=>x.m.row);
-  const extra = DB.from("offers").where(o=>!picks.includes(o)&&["Meat","Fish","Dairy","Cheese","Pantry","Frozen"].includes(o.category)).orderBy("price").limit(10-Math.min(picks.length,6)).all();
+  const extra = DB.from("offers").where(o=>!picks.includes(o)&&["Meat","Fish","Dairy","Cheese","Pantry","Frozen","Produce"].includes(o.category)).orderBy("price").limit(10-Math.min(picks.length,6)).all();
   const top=[...new Set(picks)].slice(0,6).concat(extra);
-  const n=berlinNow();
+  const n=berlinNow(); const nOff=DB.from("offers").count();
   const week = DAYS.map((d,i)=>{ const date=WEEK_DATES[i]; const rid=S.menu[i]; const r=rid&&DB.get(rid); const hol=HOLIDAYS[date];
     return '<button type="button" class="day'+(r?'':' empty-day')+(hol?' holiday':'')+'" data-act="'+(r?'open-recipe':'pick-day')+'" data-id="'+esc(r?r.id:"")+'" data-day="'+i+'">'+
-      '<span class="dn">'+d+' '+fmtD(date)+(date===n.date?' · today':'')+'</span>'+(r?'<h4>'+esc(r.name)+'</h4>':'<span>'+(hol?esc(hol)+' · tap to plan':'+ Plan dinner')+'</span>')+'</button>'; }).join("");
+      '<span class="dn">'+esc(dayN(i))+' '+fmtD(date)+(date===n.date?' · '+esc(t("today")):'')+'</span>'+(r?'<h4>'+esc(rName(r))+'</h4>':'<span>'+(hol?esc(holN(hol))+' · '+esc(t("tap_plan")):esc(t("plan_dinner")))+'</span>')+'</button>'; }).join("");
   const nA=nearest("ALDI"), nL=nearest("LIDL");
   const menuCount=Object.keys(S.menu).length;
   return '<section class="view">'+
     '<div class="hero">'+
       '<div><span class="wk"><b>'+esc(META.weekLabel)+'</b>Mo '+fmtD(META.validFrom)+' – Sa '+fmtD(META.validTo)+'</span>'+
-      '<h1><em>'+DB.from("offers").count()+' deals</em> this week at ALDI & LIDL</h1>'+
-      '<p>Your list is '+eur(T.total)+' for '+T.count+' items. '+(T.b?(T.left>=0?eur(T.left)+' left in your '+eur(T.b)+' budget.':'That is '+eur(-T.left)+' over budget.'):'')+'</p>'+
-      '<div class="acts"><button type="button" class="btn" data-tab="list">'+svg("cart")+'Open my list</button><button type="button" class="btn ghost" data-tab="recipes">'+svg("pot")+'Deal recipes</button></div></div>'+
-      '<div class="ring" role="img" aria-label="'+Math.round(pct*100)+'% of budget used"><svg viewBox="0 0 120 120"><circle cx="60" cy="60" r="52" fill="none" stroke="rgba(255,255,255,.16)" stroke-width="12"/><circle cx="60" cy="60" r="52" fill="none" stroke="'+ringCol+'" stroke-width="12" stroke-linecap="round" stroke-dasharray="'+(C*pct).toFixed(1)+' '+C.toFixed(1)+'"/></svg><div class="lbl2"><b>'+Math.round(pct*100)+'%</b><span>of budget</span></div></div>'+
+      '<h1><em>'+esc(t("hero_deals",{n:nOff}))+'</em> '+esc(t("hero_rest"))+'</h1>'+
+      '<p>'+esc(t("hero_list",{total:eur(T.total),n:T.count}))+' '+(T.b?esc(T.left>=0?t("hero_left",{left:eur(T.left),b:eur(T.b)}):t("hero_over",{over:eur(-T.left)})):'')+'</p>'+
+      '<div class="acts"><button type="button" class="btn" data-tab="list">'+svg("cart")+esc(t("open_list"))+'</button><button type="button" class="btn ghost" data-tab="recipes">'+svg("pot")+esc(t("deal_recipes"))+'</button></div></div>'+
+      '<div class="ring" role="img" aria-label="'+esc(t("budget_used",{p:Math.round(pct*100)}))+'"><svg viewBox="0 0 120 120"><circle cx="60" cy="60" r="52" fill="none" stroke="rgba(255,255,255,.16)" stroke-width="12"/><circle cx="60" cy="60" r="52" fill="none" stroke="'+ringCol+'" stroke-width="12" stroke-linecap="round" stroke-dasharray="'+(C*pct).toFixed(1)+' '+C.toFixed(1)+'"/></svg><div class="lbl2"><b>'+Math.round(pct*100)+'%</b><span>'+esc(t("of_budget"))+'</span></div></div>'+
     '</div>'+
-    holidayNotice()+
-    '<section class="sec"><div class="sechead"><h2>Deals for you</h2><button type="button" class="link" data-tab="deals">See all '+DB.from("offers").count()+'</button></div>'+
+    notices()+
+    '<section class="sec"><div class="sechead"><h2>'+esc(t("deals_for_you"))+'</h2><button type="button" class="link" data-tab="deals">'+esc(t("see_all",{n:nOff}))+'</button></div>'+
       '<div class="hscroll">'+top.map(dealCard).join("")+'</div></section>'+
-    '<section class="sec"><div class="sechead"><div><h2>This week\'s dinners</h2><p class="muted small">'+menuCount+' of 7 planned. Tap a day to choose a recipe.</p></div>'+
-      (menuCount?'<button type="button" class="btn sm primary" data-act="shop-menu">'+svg("cart")+'Shop for this menu</button>':'<button type="button" class="btn sm" data-act="auto-menu">Fill the week for me</button>')+'</div>'+
+    '<section class="sec"><div class="sechead"><div><h2>'+esc(t("dinners_title"))+'</h2><p class="muted small">'+esc(t("dinners_sub",{n:menuCount}))+'</p></div>'+
+      (menuCount?'<button type="button" class="btn sm primary" data-act="shop-menu">'+svg("cart")+esc(t("shop_menu"))+'</button>':'<button type="button" class="btn sm" data-act="auto-menu">'+esc(t("fill_week"))+'</button>')+'</div>'+
       '<div class="week">'+week+'</div></section>'+
-    '<section class="sec"><div class="sechead"><h2>Nearest stores</h2><button type="button" class="link" data-tab="stores">All stores</button></div>'+
+    '<section class="sec"><div class="sechead"><h2>'+esc(t("nearest"))+'</h2><button type="button" class="link" data-tab="stores">'+esc(t("all_stores"))+'</button></div>'+
       '<div class="duo">'+[nA,nL].filter(Boolean).map(storeCard).join("")+'</div></section>'+
     footer()+
   '</section>';
 }
 function viewDeals(){
-  const cats=["All",...new Set(DB.from("offers").all().map(o=>o.category))].sort((a,b)=>a==="All"?-1:b==="All"?1:a.localeCompare(b));
+  const cats=["All",...new Set(DB.from("offers").all().map(o=>o.category))].sort((a,b)=>a==="All"?-1:b==="All"?1:cat(a).localeCompare(cat(b)));
   let q=DB.from("offers").search(dealQ).eq("store",dealStore==="All"?null:dealStore).eq("category",dealCat==="All"?null:dealCat);
-  q = dealSort==="price"?q.orderBy("price"):dealSort==="name"?q.orderBy(r=>DB.fold(r.name)):q.orderBy(r=>r.category+DB.fold(r.name));
+  q = dealSort==="price"?q.orderBy("price"):dealSort==="name"?q.orderBy(r=>DB.fold(r.name)):q.orderBy(r=>cat(r.category)+DB.fold(r.name));
   const rows=q.all();
   return '<section class="view">'+
-    '<div class="sechead"><div><span class="eyebrow">'+esc(META.weekLabel)+' · valid Mo '+fmtD(META.validFrom)+' – Sa '+fmtD(META.validTo)+'</span><h2 style="font-size:30px;margin-top:4px">Weekly deals</h2></div></div>'+
+    '<div class="sechead"><div><span class="eyebrow">'+esc(META.weekLabel)+' · '+esc(t("valid",{from:fmtD(META.validFrom),to:fmtD(META.validTo)}))+'</span><h2 style="font-size:30px;margin-top:4px">'+esc(t("weekly_deals"))+'</h2></div></div>'+
+    notices()+
     '<div class="tools">'+
-      '<label class="searchbox"><span class="sr">Search deals</span>'+svg("search")+'<input class="input" id="dealSearch" type="search" maxlength="40" autocomplete="off" placeholder="Search: Käse, pasta, Kaffee…" value="'+esc(dealQ)+'"></label>'+
-      '<div class="tooln"><div class="seg" role="group" aria-label="Store">'+["All","ALDI","LIDL"].map(s=>'<button type="button" data-act="dstore" data-v="'+s+'" aria-pressed="'+(dealStore===s)+'">'+s+'</button>').join("")+'</div>'+
-      '<label class="sr" for="dealSort">Sort</label><select class="input" id="dealSort"><option value="price"'+(dealSort==="price"?" selected":"")+'>Cheapest first</option><option value="cat"'+(dealSort==="cat"?" selected":"")+'>By aisle</option><option value="name"'+(dealSort==="name"?" selected":"")+'>A–Z</option></select>'+
-      '<span class="count" aria-live="polite">'+rows.length+' deals</span></div>'+
-      '<div class="chiprow" role="group" aria-label="Category">'+cats.map(c=>'<button type="button" class="chip" data-act="dcat" data-v="'+esc(c)+'" aria-pressed="'+(dealCat===c)+'">'+(c==="All"?"":svg(c))+esc(c)+'</button>').join("")+'</div>'+
+      '<label class="searchbox"><span class="sr">'+esc(t("search_lbl"))+'</span>'+svg("search")+'<input class="input" id="dealSearch" type="search" maxlength="40" autocomplete="off" placeholder="'+esc(t("search_ph"))+'" value="'+esc(dealQ)+'"></label>'+
+      '<div class="tooln"><div class="seg" role="group" aria-label="'+esc(t("store"))+'">'+["All","ALDI","LIDL"].map(s=>'<button type="button" data-act="dstore" data-v="'+s+'" aria-pressed="'+(dealStore===s)+'">'+esc(s==="All"?t("all"):s)+'</button>').join("")+'</div>'+
+      '<label class="sr" for="dealSort">Sort</label><select class="input" id="dealSort"><option value="price"'+(dealSort==="price"?" selected":"")+'>'+esc(t("sort_price"))+'</option><option value="cat"'+(dealSort==="cat"?" selected":"")+'>'+esc(t("sort_aisle"))+'</option><option value="name"'+(dealSort==="name"?" selected":"")+'>'+esc(t("sort_name"))+'</option></select>'+
+      '<span class="count" aria-live="polite">'+esc(t("n_deals",{n:rows.length}))+'</span></div>'+
+      '<div class="chiprow" role="group" aria-label="'+esc(t("category"))+'">'+cats.map(c=>'<button type="button" class="chip" data-act="dcat" data-v="'+esc(c)+'" aria-pressed="'+(dealCat===c)+'">'+(c==="All"?"":svg(c))+esc(c==="All"?t("all"):cat(c))+'</button>').join("")+'</div>'+
     '</div>'+
-    (rows.length?'<div class="grid">'+rows.map(dealCard).join("")+'</div>':'<div class="empty">No deals match. Try another word or clear the filters.</div>')+
+    (rows.length?'<div class="grid">'+rows.map(dealCard).join("")+'</div>':'<div class="empty">'+esc(t("no_deals"))+'</div>')+
     footer()+
   '</section>';
 }
@@ -302,92 +449,93 @@ function viewList(){
   const L=lines(), T=totals(L), fm=favMatches();
   const miss=fm.filter(x=>!x.m).map(x=>x.fav);
   const pct=T.b?clamp(T.total/T.b*100,0,100):0;
-  const lab={ok:"On budget",warn:"Close to budget",bad:"Over budget"}[T.state];
+  const lab={ok:t("on_budget"),warn:t("near_budget"),bad:t("over_budget")}[T.state];
   const cols=["ALDI","LIDL"].map(st=>{
     const ls=L.filter(l=>l.store===st); const sub=ls.reduce((a,l)=>a+l.price*l.qty,0); const nb=nearest(st);
-    const cats=[...new Set(ls.map(l=>l.cat))].sort();
+    const cats=[...new Set(ls.map(l=>l.cat))].sort((a,b)=>cat(a).localeCompare(cat(b)));
     return '<div class="card shop"><div class="shophead"><div><span class="store-tag '+st+'">'+(st==="ALDI"?"ALDI SÜD":"LIDL")+'</span>'+
-      (nb?'<div class="where">'+esc(nb.s.street)+', '+esc(nb.s.town)+' · '+nb.km.toFixed(1).replace(".",",")+' km</div>':'')+'</div><span class="muted small">'+ls.length+' items</span></div>'+
-      (ls.length?cats.map(c=>'<div class="cat">'+svg(c)+esc(c)+'</div>'+ls.filter(l=>l.cat===c).sort((a,b)=>a.name.localeCompare(b.name)).map(l=>{
-        const done=S.checked.includes(l.id);
-        return '<div class="li'+(done?' done':'')+'"><button type="button" class="check" data-act="check" data-id="'+esc(l.id)+'" role="checkbox" aria-checked="'+done+'" aria-label="Got '+esc(l.name)+'">'+svg("check")+'</button>'+
-          '<div><div class="lnm">'+esc(l.name)+'</div><div class="lmeta">'+(l.sale?'<span class="sale">ANGEBOT</span>':l.custom?'<span>your price</span>':'<span>shelf price</span>')+
+      (nb?'<div class="where">'+esc(nb.s.street)+', '+esc(nb.s.town)+' · '+km(nb.km)+' km</div>':'')+'</div><span class="muted small">'+esc(t("items_n",{n:ls.length}))+'</span></div>'+
+      (ls.length?cats.map(c=>'<div class="cat">'+svg(c)+esc(cat(c))+'</div>'+ls.filter(l=>l.cat===c).sort((a,b)=>a.name.localeCompare(b.name)).map(l=>{
+        const done=S.checked.includes(l.id); const other=st==="ALDI"?"LIDL":"ALDI";
+        return '<div class="li'+(done?' done':'')+'"><button type="button" class="check" data-act="check" data-id="'+esc(l.id)+'" role="checkbox" aria-checked="'+done+'" aria-label="'+esc(t("got_x",{x:l.name}))+'">'+svg("check")+'</button>'+
+          '<div><div class="lnm">'+esc(l.name)+'</div><div class="lmeta">'+(l.sale?'<span class="sale">'+esc(t("angebot"))+'</span>':l.custom?'<span>'+esc(t("your_price"))+'</span>':'<span>'+esc(t("shelf"))+'</span>')+
           (l.size?'<span>'+esc(l.size)+'</span>':'')+'<span class="num">'+eur(l.price)+'</span>'+
-          (l.swap?'<button type="button" class="store-tag '+(st==="ALDI"?"LIDL":"ALDI")+'" data-act="swap" data-id="'+esc(l.id)+'" title="Buy at the other store">→ '+(st==="ALDI"?"LIDL":"ALDI")+'</button>':'')+'</div></div>'+
-          '<div class="lright"><span class="lprice">'+eur(l.price*l.qty)+'</span><span class="step"><button type="button" data-act="dec" data-id="'+esc(l.id)+'" aria-label="One less">−</button><span>'+l.qty+'</span><button type="button" data-act="inc" data-id="'+esc(l.id)+'" aria-label="One more">+</button></span></div></div>';
-      }).join("")).join(""):'<div class="empty" style="margin:14px;border-radius:14px">Nothing to buy here yet.</div>')+
-      '<div class="shopfoot"><span>Subtotal</span><span class="num">'+eur(sub)+'</span></div></div>';
+          (l.swap?'<button type="button" class="store-tag '+other+'" data-act="swap" data-id="'+esc(l.id)+'" title="'+esc(t("other_store"))+'">→ '+other+'</button>':'')+'</div></div>'+
+          '<div class="lright"><span class="lprice">'+eur(l.price*l.qty)+'</span><span class="step"><button type="button" data-act="dec" data-id="'+esc(l.id)+'" aria-label="'+esc(t("one_less"))+'">−</button><span>'+l.qty+'</span><button type="button" data-act="inc" data-id="'+esc(l.id)+'" aria-label="'+esc(t("one_more"))+'">+</button></span></div></div>';
+      }).join("")).join(""):'<div class="empty" style="margin:14px;border-radius:14px">'+esc(t("nothing_here"))+'</div>')+
+      '<div class="shopfoot"><span>'+esc(t("subtotal"))+'</span><span class="num">'+eur(sub)+'</span></div></div>';
   }).join("");
   const doneN=L.filter(l=>S.checked.includes(l.id)).length;
   return '<section class="view">'+
-    '<div class="sechead"><div><span class="eyebrow">Household of 4 · '+esc(META.weekLabel)+'</span><h2 style="font-size:30px;margin-top:4px">Shopping list</h2></div>'+
-      '<div class="row"><button type="button" class="btn sm" data-act="copy">'+svg("copy")+'Copy</button>'+(doneN?'<button type="button" class="btn sm" data-act="clear-done">Remove '+doneN+' ticked</button>':'')+'</div></div>'+
-    '<div class="card summary"><div><span class="eyebrow">Total</span><div class="big">'+eur(T.total)+'</div></div>'+
+    '<div class="sechead"><div><span class="eyebrow">'+esc(t("household"))+' · '+esc(META.weekLabel)+'</span><h2 style="font-size:30px;margin-top:4px">'+esc(t("list_title"))+'</h2></div>'+
+      '<div class="row"><button type="button" class="btn sm primary" data-act="share-open">'+svg("send")+esc(t("share_list"))+'</button><button type="button" class="btn sm" data-act="copy">'+svg("copy")+esc(t("copy"))+'</button>'+(doneN?'<button type="button" class="btn sm" data-act="clear-done">'+esc(t("remove_ticked",{n:doneN}))+'</button>':'')+'</div></div>'+
+    '<div class="card summary"><div><span class="eyebrow">'+esc(t("total"))+'</span><div class="big">'+eur(T.total)+'</div></div>'+
       '<div><div class="bar '+T.state+'"><i style="width:'+pct.toFixed(1)+'%"></i></div>'+
-      '<div class="stats"><span class="pill '+T.state+'">'+lab+'</span><span>Budget <b>'+eur(T.b)+'</b></span><span>'+(T.left>=0?'Left':'Over by')+' <b>'+eur(Math.abs(T.left))+'</b></span><span>On sale <b>'+eur(T.sale)+'</b></span><span><b>'+T.count+'</b> packs</span></div></div></div>'+
-    holidayNotice()+
-    '<details class="card"'+(S.seeded?'':' open')+'><summary>Favorites & budget '+svg("chev")+'</summary><div class="setbody">'+
-      '<div class="field"><label for="favIn">Favorite groceries</label><div class="favs">'+
-        S.favorites.map((f,i)=>'<span class="fav'+(miss.includes(f)?' miss':'')+'">'+esc(f)+'<button type="button" data-act="unfav" data-i="'+i+'" aria-label="Remove '+esc(f)+'">×</button></span>').join("")+
-        '<input id="favIn" maxlength="40" autocomplete="off" placeholder="Add, then Enter (English or German)"></div>'+
-        '<p class="muted small">'+(miss.length?'No price for: '+esc(miss.join(", "))+'. Add it below with the price you see.':'Every favorite has a price this week.')+'</p>'+
-        '<div class="row"><button type="button" class="btn sm primary" data-act="rebuild">Rebuild list from favorites</button><button type="button" class="btn sm" data-act="merge">Add missing favorites</button></div></div>'+
-      '<div class="field" style="gap:14px"><div class="field"><label for="budgetIn">Weekly budget</label><div class="money"><input id="budgetIn" type="number" inputmode="numeric" min="0" max="2000" step="5" value="'+esc(S.budget)+'"><span>€</span></div></div>'+
-        '<label class="switch" for="bigIn"><input type="checkbox" id="bigIn"'+(S.big?' checked':'')+'><span><b>Big appetites</b><br><span class="muted small">Four near-grown adults, +25% on bulk items</span></span></label></div>'+
+      '<div class="stats"><span class="pill '+T.state+'">'+esc(lab)+'</span><span>'+esc(t("budget"))+' <b>'+eur(T.b)+'</b></span><span>'+esc(T.left>=0?t("left"):t("over_by"))+' <b>'+eur(Math.abs(T.left))+'</b></span><span>'+esc(t("on_sale"))+' <b>'+eur(T.sale)+'</b></span><span><b>'+T.count+'</b> '+esc(t("packs"))+'</span></div></div></div>'+
+    notices()+
+    '<details class="card"'+(S.seeded?'':' open')+'><summary>'+esc(t("fav_budget"))+' '+svg("chev")+'</summary><div class="setbody">'+
+      '<div class="field"><label for="favIn">'+esc(t("fav_label"))+'</label><div class="favs">'+
+        S.favorites.map((f,i)=>'<span class="fav'+(miss.includes(f)?' miss':'')+'">'+esc(f)+'<button type="button" data-act="unfav" data-i="'+i+'" aria-label="× '+esc(f)+'">×</button></span>').join("")+
+        '<input id="favIn" maxlength="40" autocomplete="off" placeholder="'+esc(t("fav_ph"))+'"></div>'+
+        '<p class="muted small">'+esc(miss.length?t("no_price_for",{x:miss.join(", ")}):t("all_priced"))+'</p>'+
+        '<div class="row"><button type="button" class="btn sm primary" data-act="rebuild">'+esc(t("rebuild"))+'</button><button type="button" class="btn sm" data-act="merge">'+esc(t("merge"))+'</button></div></div>'+
+      '<div class="field" style="gap:14px"><div class="field"><label for="budgetIn">'+esc(t("weekly_budget"))+'</label><div class="money"><input id="budgetIn" type="number" inputmode="numeric" min="0" max="2000" step="5" value="'+esc(S.budget)+'"><span>€</span></div></div>'+
+        '<label class="switch" for="bigIn"><input type="checkbox" id="bigIn"'+(S.big?' checked':'')+'><span><b>'+esc(t("big"))+'</b><br><span class="muted small">'+esc(t("big_sub"))+'</span></span></label></div>'+
     '</div></details>'+
     '<div class="storecol">'+cols+'</div>'+
-    '<div class="card" style="padding:16px 18px;display:flex;flex-direction:column;gap:10px"><h3 style="font-size:17px">Add something else</h3>'+
-      '<form class="addform" id="addForm" autocomplete="off"><input class="input" id="addName" maxlength="60" placeholder="Item, e.g. Avocados" required><input class="input" id="addPrice" inputmode="decimal" maxlength="7" placeholder="Price €" required>'+
-      '<select class="input" id="addStore"><option>ALDI</option><option>LIDL</option></select><button class="btn primary" type="submit">Add</button></form></div>'+
+    '<div class="card" style="padding:16px 18px;display:flex;flex-direction:column;gap:10px"><h3 style="font-size:17px">'+esc(t("add_else"))+'</h3>'+
+      '<form class="addform" id="addForm" autocomplete="off"><input class="input" id="addName" maxlength="60" placeholder="'+esc(t("add_name_ph"))+'" required><input class="input" id="addPrice" inputmode="decimal" maxlength="7" placeholder="'+esc(t("add_price_ph"))+'" required>'+
+      '<select class="input" id="addStore"><option>ALDI</option><option>LIDL</option></select><button class="btn primary" type="submit">'+esc(t("add"))+'</button></form></div>'+
     footer()+
   '</section>';
 }
 function recipeCard(r){
   const c=recipeCost(r); const inWeek=Object.values(S.menu).includes(r.id);
   return '<article class="card rcard">'+
-    '<div class="rband" data-art="'+esc(r.color)+'" data-seed="'+esc(r.id)+'"><canvas aria-hidden="true"></canvas><span class="meal">'+esc(r.meal)+' · '+r.mins+' min</span></div>'+
-    '<div class="rbody"><h3>'+esc(r.name)+'</h3><span class="de">'+esc(r.de)+'</span><p>'+esc(r.blurb)+'</p>'+
-    '<div class="row"><span class="pill bad">'+c.deals+' deal'+(c.deals===1?'':'s')+'</span><span class="pill info">'+esc(r.level)+'</span></div>'+
-    '<div class="rfoot"><div class="rcost"><b class="num">'+eur(c.cost)+'</b><span>'+eur(c.per)+' per person</span></div>'+
-    '<div class="row"><button type="button" class="btn sm'+(inWeek?' inweek':'')+'" data-act="toggle-week" data-id="'+esc(r.id)+'">'+(inWeek?svg("check")+'In week':'+ Week')+'</button><button type="button" class="btn sm primary" data-act="open-recipe" data-id="'+esc(r.id)+'">Recipe</button></div></div></div></article>';
+    '<div class="rband" data-art="'+esc(r.color)+'" data-seed="'+esc(r.id)+'"><canvas aria-hidden="true"></canvas><span class="meal">'+esc(t("meal_"+r.meal))+' · '+r.mins+' '+esc(t("min"))+'</span></div>'+
+    '<div class="rbody"><h3>'+esc(rName(r))+'</h3>'+(rAlt(r)?'<span class="de">'+esc(rAlt(r))+'</span>':'')+'<p>'+esc(rBlurb(r))+'</p>'+
+    '<div class="row"><span class="pill bad">'+esc(c.deals===1?t("deal_1"):t("deals_n",{n:c.deals}))+'</span><span class="pill info">'+esc(t("lvl_"+r.level))+'</span></div>'+
+    '<div class="rfoot"><div class="rcost"><b class="num">'+eur(c.cost)+'</b><span>'+esc(t("per_person",{x:eur(c.per)}))+'</span></div>'+
+    '<div class="row"><button type="button" class="btn sm'+(inWeek?' inweek':'')+'" data-act="toggle-week" data-id="'+esc(r.id)+'">'+(inWeek?svg("check")+esc(t("in_week")):esc(t("add_week")))+'</button><button type="button" class="btn sm primary" data-act="open-recipe" data-id="'+esc(r.id)+'">'+esc(t("recipe"))+'</button></div></div></div></article>';
 }
+const RFILTERS={f_all:()=>true,f_dinner:r=>r.meal==="Dinner",f_breakfast:r=>r.meal==="Breakfast",f_quick:r=>r.mins<=30,f_deals:()=>true};
 function viewRecipes(){
-  const f={All:()=>true,Dinner:r=>r.meal==="Dinner",Breakfast:r=>r.meal==="Breakfast","Under 30 min":r=>r.mins<=30,"Most deals":()=>true};
-  let q=DB.from("recipes").where(f[recFilter]||f.All);
-  q = recFilter==="Most deals"?q.orderBy(r=>-recipeCost(r).deals):q.orderBy(r=>recipeCost(r).cost);
+  let q=DB.from("recipes").where(RFILTERS[recFilter]||RFILTERS.f_all);
+  q = recFilter==="f_deals"?q.orderBy(r=>-recipeCost(r).deals):q.orderBy(r=>recipeCost(r).cost);
   return '<section class="view">'+
-    '<div class="sechead"><div><span class="eyebrow">Built from '+esc(META.weekLabel)+' deals · serves 4</span><h2 style="font-size:30px;margin-top:4px">Deal recipes</h2></div></div>'+
-    '<div class="chiprow" role="group" aria-label="Filter recipes">'+Object.keys(f).map(k=>'<button type="button" class="chip" data-act="rfilter" data-v="'+esc(k)+'" aria-pressed="'+(recFilter===k)+'">'+esc(k)+'</button>').join("")+'</div>'+
+    '<div class="sechead"><div><span class="eyebrow">'+esc(t("rec_eyebrow",{w:META.weekLabel}))+'</span><h2 style="font-size:30px;margin-top:4px">'+esc(t("rec_title"))+'</h2></div></div>'+
+    '<div class="chiprow" role="group">'+Object.keys(RFILTERS).map(k=>'<button type="button" class="chip" data-act="rfilter" data-v="'+k+'" aria-pressed="'+(recFilter===k)+'">'+esc(t(k))+'</button>').join("")+'</div>'+
     '<div class="rgrid">'+q.all().map(recipeCard).join("")+'</div>'+
     footer()+
   '</section>';
 }
 function storeCard(x){
-  const {s,km}=x; const st=storeStatus(s);
+  const {s}=x; const st=storeStatus(s);
   return '<article class="card scard"><div class="st"><span class="store-tag '+esc(s.chain)+'">'+(s.chain==="ALDI"?"ALDI SÜD":"LIDL")+'</span>'+
-    '<span class="pill '+(st.open?(st.soon?'warn':'ok'):'bad')+'">'+svg("clock",' width="13" height="13"')+esc(st.txt)+'</span></div>'+
+    '<span class="pill '+(st.open?(st.soon?'warn':'ok'):'bad')+'">'+svg("clock",' width="13" height="13"')+esc(t(st.code,{t:st.time}))+'</span></div>'+
     '<div><h3>'+esc(s.street)+'</h3><p class="addr">'+esc(s.zip)+' '+esc(s.town)+' · Mo–Sa '+esc(s.open)+'–'+esc(s.close)+'</p></div>'+
-    '<div class="sfoot"><span class="dist">'+km.toFixed(1).replace(".",",")+' <small>km from '+esc(S.home)+'</small></span>'+
-    '<a class="btn sm primary" href="'+esc(mapsUrl(s))+'" target="_blank" rel="noopener noreferrer">'+svg("nav")+'Directions</a></div></article>';
+    '<div class="sfoot"><span class="dist">'+km(x.km)+' <small>'+esc(t("km_from",{x:S.home}))+'</small></span>'+
+    '<a class="btn sm primary" href="'+esc(mapsUrl(s))+'" target="_blank" rel="noopener noreferrer">'+svg("nav")+esc(t("directions"))+'</a></div></article>';
 }
 function viewStores(){
   const all=storesNear();
   return '<section class="view">'+
-    '<div class="sechead"><div><span class="eyebrow">Hours Mo–Sa · Sundays and holidays closed</span><h2 style="font-size:30px;margin-top:4px">Stores near you</h2></div>'+
-      '<div class="seg" role="group" aria-label="Your location">'+DB.from("homes").all().map(h=>'<button type="button" data-act="home" data-v="'+esc(h.id)+'" aria-pressed="'+(S.home===h.id)+'">'+esc(h.label)+'</button>').join("")+'</div></div>'+
-    holidayNotice()+
-    '<div class="mapbox"><canvas id="map" aria-label="Map of stores around Bolanden and Kaiserslautern" role="img"></canvas></div>'+
+    '<div class="sechead"><div><span class="eyebrow">'+esc(t("stores_eyebrow"))+'</span><h2 style="font-size:30px;margin-top:4px">'+esc(t("stores_title"))+'</h2></div>'+
+      '<div class="seg" role="group" aria-label="'+esc(t("your_loc"))+'">'+DB.from("homes").all().map(h=>'<button type="button" data-act="home" data-v="'+esc(h.id)+'" aria-pressed="'+(S.home===h.id)+'">'+esc(h.label)+'</button>').join("")+'</div></div>'+
+    notices()+
+    '<div class="mapbox"><canvas id="map" aria-label="'+esc(t("map_aria"))+'" role="img"></canvas></div>'+
     '<div class="legend"><span><i style="background:var(--sky)"></i>ALDI SÜD</span><span><i style="background:var(--mango)"></i>LIDL</span><span><i style="background:var(--tomato)"></i>'+esc(S.home)+'</span></div>'+
     '<div class="sgrid">'+all.map(storeCard).join("")+'</div>'+
-    '<p class="muted small">Weekly Prospekt deals are the same across ALDI SÜD and LIDL stores in the region, but stock varies by branch. Bolanden has no discounter of its own; the nearest are in Kirchheimbolanden.</p>'+
+    '<p class="muted small">'+esc(t("stores_note"))+'</p>'+
     footer()+
   '</section>';
 }
 function footer(){
-  return '<footer class="foot"><p>Deal prices from the '+esc(META.weekLabel)+' ALDI SÜD and LIDL Prospekte (updated '+esc(fmtD(META.updated))+'). "Shelf price" items use typical everyday discounter prices and are estimates. Fresh meat and produce deals are published on Monday.</p>'+
-    '<p>Check the originals: <a href="https://www.aldi-sued.de/angebote" target="_blank" rel="noopener noreferrer">ALDI SÜD Angebote</a> · <a href="https://www.lidl.de/c/online-prospekte/s10005610" target="_blank" rel="noopener noreferrer">LIDL Prospekte</a></p>'+
-    '<p>Your list stays on this phone. Nothing is sent anywhere.</p></footer>';
+  return '<footer class="foot"><p>'+esc(t("foot1",{w:META.weekLabel,d:fmtD(META.updated)}))+'</p>'+
+    '<p>'+esc(t("foot2"))+' <a href="https://www.aldi-sued.de/angebote" target="_blank" rel="noopener noreferrer">ALDI SÜD</a> · <a href="https://www.lidl.de/c/online-prospekte/s10005610" target="_blank" rel="noopener noreferrer">LIDL</a></p>'+
+    '<p>'+esc(t("foot3"))+'</p></footer>';
 }
+
 
 /* ---------------- canvas art: produce confetti for recipe bands ---------- */
 function seedRand(str){ let h=2166136261; for(const ch of str){h^=ch.charCodeAt(0);h=Math.imul(h,16777619);} return ()=>{h^=h<<13;h^=h>>>17;h^=h<<5;return ((h>>>0)%10000)/10000;}; }
@@ -439,37 +587,90 @@ function paintMap(){
   g.fillText(hl, hp[0]+14+hw>W-4?hp[0]-14-hw:hp[0]+14, hp[1]-14);
 }
 
-/* ---------------- sheets: recipe detail, day picker, cook mode ---------- */
+
+/* ---------------- sheets: recipe detail, day picker, share, import, cook mode ---------- */
 let lastFocus=null;
 function openLayer(html){ lastFocus=document.activeElement; $("#layer").innerHTML=html; document.body.style.overflow="hidden";
   const f=$("#layer").querySelector("[data-autofocus]")||$("#layer").querySelector("button"); if(f) f.focus(); paintArt($("#layer")); }
-function closeLayer(){ stopTimer(); releaseWake(); $("#layer").innerHTML=""; document.body.style.overflow=""; if(lastFocus&&lastFocus.focus) lastFocus.focus(); }
+function closeLayer(){ stopTimer(); releaseWake(); cook=null; $("#layer").innerHTML=""; document.body.style.overflow=""; if(lastFocus&&lastFocus.focus) lastFocus.focus(); }
+const sheet = (label, inner) => '<div class="sheet-wrap" data-act="close-bg"><div class="sheet" role="dialog" aria-modal="true" aria-label="'+esc(label)+'">'+inner+'</div></div>';
 function recipeSheet(id){
   const r=DB.get(id); if(!r||DB.tableOf(id)!=="recipes") return; const c=recipeCost(r); const inWeek=Object.values(S.menu).includes(r.id);
-  const ing=r.ing.map(([ref,label,amt])=>{ const it=ref&&DB.get(ref); const deal=it&&isOffer(it);
-    return '<div class="ing"><span class="dot'+(deal?' deal':'')+'"></span><div><div class="lnm">'+esc(label)+'</div><div class="lmeta">'+(amt?'<span>'+esc(amt)+'</span>':'')+
-      (it?'<span class="store-tag '+storeOf(it)+'">'+storeOf(it)+'</span><span>'+esc(it.name)+'</span>':'<span>from your pantry</span>')+'</div></div>'+
-      (it?'<span class="lprice">'+(deal?'<span class="sale">ANGEBOT</span> ':'')+eur(priceOf(it))+'</span>':'<span></span>')+'</div>'; }).join("");
-  const steps=r.steps.map(([t,txt,sec])=>'<li><div><b>'+esc(t)+'</b>'+esc(txt)+(sec?'<div class="t">'+svg("clock",' width="12" height="12" style="vertical-align:-2px"')+' '+Math.round(sec/60)+' min</div>':'')+'</div></li>').join("");
-  openLayer('<div class="sheet-wrap" data-act="close-bg"><div class="sheet" role="dialog" aria-modal="true" aria-label="'+esc(r.name)+'">'+
-    '<div class="sheethead" data-art="'+esc(r.color)+'" data-seed="'+esc(r.id)+'"><canvas aria-hidden="true"></canvas><button type="button" class="close" data-act="close" aria-label="Close" data-autofocus>'+svg("x")+'</button>'+
-    '<h2>'+esc(r.name)+'</h2><div class="de">'+esc(r.de)+'</div><div class="facts"><span>Serves 4</span><span>'+r.mins+' min</span><span>'+eur(c.cost)+' total</span><span>'+eur(c.per)+' / person</span><span>'+c.deals+' deals</span></div></div>'+
-    '<div class="sheetbody"><p class="muted">'+esc(r.blurb)+'</p>'+
-    '<div class="sheetacts"><button type="button" class="btn hot" data-act="cook" data-id="'+esc(r.id)+'">'+svg("play")+'Start cooking</button><button type="button" class="btn primary" data-act="recipe-to-list" data-id="'+esc(r.id)+'">'+svg("cart")+'Add ingredients to list</button></div>'+
-    '<section class="sec"><h3 style="font-size:19px">Ingredients</h3><div class="card" style="padding:4px 16px">'+ing+'</div><p class="muted small">Red dot = on sale this week. Cost counts only the share of each pack the recipe uses.</p></section>'+
-    '<section class="sec"><h3 style="font-size:19px">Method</h3><ol class="steps">'+steps+'</ol></section>'+
-    '<button type="button" class="btn'+(inWeek?' inweek':'')+'" data-act="toggle-week" data-id="'+esc(r.id)+'">'+(inWeek?svg("check")+'In this week\'s menu':'+ Add to this week\'s menu')+'</button>'+
-    '</div></div></div>');
+  const ing=r.ing.map(([ref,,amt],i)=>{ const it=ref&&DB.get(ref); const deal=it&&isOffer(it);
+    return '<div class="ing"><span class="dot'+(deal?' deal':'')+'"></span><div><div class="lnm">'+esc(rIngLabel(r,i))+'</div><div class="lmeta">'+(amt?'<span>'+esc(amt)+'</span>':'')+
+      (it?'<span class="store-tag '+storeOf(it)+'">'+storeOf(it)+'</span><span>'+esc(it.name)+'</span>':'<span>'+esc(t("pantry"))+'</span>')+'</div></div>'+
+      (it?'<span class="lprice">'+(deal?'<span class="sale">'+esc(t("angebot"))+'</span> ':'')+eur(priceOf(it))+'</span>':'<span></span>')+'</div>'; }).join("");
+  const steps=r.steps.map((_,i)=>{ const [ti,txt,sec]=rStep(r,i); return '<li><div><b>'+esc(ti)+'</b>'+esc(txt)+(sec?'<div class="t">'+svg("clock",' width="12" height="12" style="vertical-align:-2px"')+' '+Math.round(sec/60)+' '+esc(t("min"))+'</div>':'')+'</div></li>'; }).join("");
+  openLayer(sheet(rName(r),
+    '<div class="sheethead" data-art="'+esc(r.color)+'" data-seed="'+esc(r.id)+'"><canvas aria-hidden="true"></canvas><button type="button" class="close" data-act="close" aria-label="'+esc(t("close"))+'" data-autofocus>'+svg("x")+'</button>'+
+    '<h2>'+esc(rName(r))+'</h2>'+(rAlt(r)?'<div class="de">'+esc(rAlt(r))+'</div>':'')+'<div class="facts"><span>'+esc(t("serves4"))+'</span><span>'+r.mins+' '+esc(t("min"))+'</span><span>'+esc(t("total_x",{x:eur(c.cost)}))+'</span><span>'+esc(t("per_x",{x:eur(c.per)}))+'</span><span>'+esc(c.deals===1?t("deal_1"):t("deals_n",{n:c.deals}))+'</span></div></div>'+
+    '<div class="sheetbody"><p class="muted">'+esc(rBlurb(r))+'</p>'+
+    '<div class="sheetacts"><button type="button" class="btn hot" data-act="cook" data-id="'+esc(r.id)+'">'+svg("play")+esc(t("start_cooking"))+'</button><button type="button" class="btn primary" data-act="recipe-to-list" data-id="'+esc(r.id)+'">'+svg("cart")+esc(t("ing_to_list"))+'</button></div>'+
+    '<section class="sec"><h3 style="font-size:19px">'+esc(t("ingredients"))+'</h3><div class="card" style="padding:4px 16px">'+ing+'</div><p class="muted small">'+esc(t("ing_note"))+'</p></section>'+
+    '<section class="sec"><h3 style="font-size:19px">'+esc(t("method"))+'</h3><ol class="steps">'+steps+'</ol></section>'+
+    '<button type="button" class="btn'+(inWeek?' inweek':'')+'" data-act="toggle-week" data-id="'+esc(r.id)+'">'+(inWeek?svg("check")+esc(t("in_menu")):esc(t("add_menu")))+'</button>'+
+    '</div>'));
 }
 function dayPicker(day){
   const d=+day; if(!(d>=0&&d<=6)) return;
   const rows=DB.from("recipes").where(r=>r.meal==="Dinner").orderBy(r=>recipeCost(r).cost).all();
-  openLayer('<div class="sheet-wrap" data-act="close-bg"><div class="sheet" role="dialog" aria-modal="true" aria-label="Choose dinner">'+
-    '<div class="sheetbody"><div class="sechead"><div><span class="eyebrow">'+DAYS[d]+' '+fmtD(WEEK_DATES[d])+'</span><h2 style="font-size:24px">Pick a dinner</h2></div><button type="button" class="btn sm" data-act="close" data-autofocus>Close</button></div>'+
-    (S.menu[d]?'<button type="button" class="btn" data-act="clear-day" data-day="'+d+'">Clear '+DAYS[d]+'</button>':'')+
-    rows.map(r=>{const c=recipeCost(r);return '<button type="button" class="card" style="display:flex;gap:12px;align-items:center;padding:12px;text-align:left" data-act="set-day" data-day="'+d+'" data-id="'+esc(r.id)+'"><span class="ico c-'+esc(r.color==="sky"?"sky":r.color)+'">'+svg("pot")+'</span><span style="flex:1"><b style="display:block">'+esc(r.name)+'</b><span class="muted small">'+r.mins+' min · '+c.deals+' deals</span></span><span class="num">'+eur(c.cost)+'</span></button>';}).join("")+
-    '</div></div></div>');
+  openLayer(sheet(t("pick_dinner"),
+    '<div class="sheetbody"><div class="sechead"><div><span class="eyebrow">'+esc(dayN(d))+' '+fmtD(WEEK_DATES[d])+'</span><h2 style="font-size:24px">'+esc(t("pick_dinner"))+'</h2></div><button type="button" class="btn sm" data-act="close" data-autofocus>'+esc(t("close"))+'</button></div>'+
+    (S.menu[d]?'<button type="button" class="btn" data-act="clear-day" data-day="'+d+'">'+esc(t("clear_day",{d:dayN(d)}))+'</button>':'')+
+    rows.map(r=>{const c=recipeCost(r);return '<button type="button" class="card pickrow" data-act="set-day" data-day="'+d+'" data-id="'+esc(r.id)+'"><span class="ico c-'+esc(r.color)+'">'+svg("pot")+'</span><span style="flex:1"><b style="display:block">'+esc(rName(r))+'</b><span class="muted small">'+r.mins+' '+esc(t("min"))+' · '+esc(c.deals===1?t("deal_1"):t("deals_n",{n:c.deals}))+'</span></span><span class="num">'+eur(c.cost)+'</span></button>';}).join("")+
+    '</div>'));
 }
+
+/* ---- list sharing: the whole list travels inside the link (#l=…), nothing is uploaded ---- */
+const SITE_URL = "https://mattyicematrix.github.io/wochenkorb/";
+function b64urlEncode(str){ const bytes=new TextEncoder().encode(str); let bin=""; bytes.forEach(b=>bin+=String.fromCharCode(b)); return btoa(bin).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,""); }
+function b64urlDecode(s){ s=s.replace(/-/g,"+").replace(/_/g,"/"); while(s.length%4) s+="="; const bin=atob(s); const bytes=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i); return new TextDecoder().decode(bytes); }
+function shareLink(){
+  const p={v:1,w:META.validFrom,i:S.items,c:S.custom.map(c=>[c.name,c.price,c.store,c.qty]),m:S.menu};
+  return SITE_URL+"#l="+b64urlEncode(JSON.stringify(p));
+}
+function listText(){
+  const L=lines(); const T=totals(L);
+  return t("copy_head")+" "+META.weekLabel+"\n\n"+["ALDI","LIDL"].map(st=>{const ls=L.filter(l=>l.store===st); if(!ls.length) return "";
+    return (st==="ALDI"?"ALDI SÜD":"LIDL")+"\n"+ls.map(l=>(S.checked.includes(l.id)?"☑ ":"☐ ")+l.qty+"× "+l.name+(l.size?" ("+l.size+")":"")+" – "+eur(l.price*l.qty)).join("\n");}).filter(Boolean).join("\n\n")+"\n\n"+t("copy_total")+" "+eur(T.total);
+}
+function shareSheet(){
+  const L=lines(), T=totals(L); const url=shareLink(); const msg=t("share_msg",{n:L.length,total:eur(T.total)});
+  const wa="https://wa.me/?text="+encodeURIComponent(msg+"\n"+url);
+  openLayer(sheet(t("share_title"),
+    '<div class="sheetbody"><div class="sechead"><h2 style="font-size:24px">'+esc(t("share_title"))+'</h2><button type="button" class="btn sm" data-act="close" data-autofocus>'+esc(t("close"))+'</button></div>'+
+    '<p class="muted">'+esc(t("share_sub"))+'</p>'+
+    (navigator.share?'<button type="button" class="btn primary" data-act="share-native">'+svg("send")+esc(t("share_native"))+'</button>':'')+
+    '<a class="btn wa" href="'+esc(wa)+'" target="_blank" rel="noopener noreferrer">'+svg("chat")+esc(t("share_wa"))+'</a>'+
+    '<div class="sheetacts"><button type="button" class="btn" data-act="copy-link">'+svg("copy")+esc(t("share_copy_link"))+'</button><button type="button" class="btn" data-act="copy">'+svg("list")+esc(t("share_copy_text"))+'</button></div>'+
+    '</div>'));
+}
+let pendingImport=null;
+function readImport(){
+  let h=""; try{ h=location.hash||""; }catch(e){ return null; }
+  if(!h.startsWith("#l=") || h.length>16000) return null;
+  let p; try{ p=JSON.parse(b64urlDecode(h.slice(3))); }catch(e){ return null; }
+  if(!p||typeof p!=="object"||p.v!==1) return null;
+  const items={}; if(p.i&&typeof p.i==="object") for(const [k,v] of Object.entries(p.i).slice(0,200)) if(DB.get(k)&&DB.tableOf(k)!=="recipes"&&DB.tableOf(k)!=="stores"&&Number.isInteger(v)&&v>0) items[k]=clamp(v,1,99);
+  const custom=Array.isArray(p.c)?p.c.slice(0,100).map(c=>Array.isArray(c)&&typeof c[0]==="string"&&c[0].trim()?{id:"c-"+Math.random().toString(36).slice(2,10),name:c[0].replace(/[<>]/g,"").slice(0,60),price:clamp(+c[1]||0,0,500),store:c[2]==="LIDL"?"LIDL":"ALDI",qty:clamp(parseInt(c[3])||1,1,99)}:null).filter(Boolean):[];
+  const menu={}; if(p.m&&typeof p.m==="object") for(const [k,v] of Object.entries(p.m)) if(/^[0-6]$/.test(k)&&DB.tableOf(v)==="recipes") menu[k]=v;
+  return {items,custom,menu,old:p.w!==META.validFrom};
+}
+function clearHash(){ try{ history.replaceState(null,"",location.pathname+location.search); }catch(e){} }
+function importSheet(imp){
+  pendingImport=imp;
+  const n=Object.keys(imp.items).length+imp.custom.length;
+  const total=Object.entries(imp.items).reduce((a,[k,q])=>a+priceOf(DB.get(k))*q,0)+imp.custom.reduce((a,c)=>a+c.price*c.qty,0);
+  const mn=Object.keys(imp.menu).length;
+  openLayer(sheet(t("imp_title"),
+    '<div class="sheetbody"><span class="ico c-basil">'+svg("list")+'</span><h2 style="font-size:24px">'+esc(t("imp_title"))+'</h2>'+
+    '<p class="big" style="font-size:30px">'+esc(t("imp_sub",{n,total:eur(total),menu:mn?t("imp_menu",{n:mn}):""}))+'</p>'+
+    (imp.old?'<div class="notice" role="note">'+svg("clock")+'<div>'+esc(t("imp_old"))+'</div></div>':'')+
+    '<button type="button" class="btn primary" data-act="imp-replace" data-autofocus>'+esc(t("imp_replace"))+'</button>'+
+    '<button type="button" class="btn" data-act="imp-merge">'+esc(t("imp_merge"))+'</button>'+
+    '<button type="button" class="btn" data-act="imp-ignore">'+esc(t("imp_ignore"))+'</button></div>'));
+}
+
 /* cook mode */
 let cook=null, timerI=null, wake=null;
 function stopTimer(){ clearInterval(timerI); timerI=null; }
@@ -478,14 +679,14 @@ async function grabWake(){ try{ if(navigator.wakeLock) wake=await navigator.wake
 function startCook(id){ const r=DB.get(id); if(!r||DB.tableOf(id)!=="recipes") return; stopTimer(); cook={r,i:0,left:r.steps[0][2],run:false}; grabWake(); drawCook(); }
 function fmtT(s){ s=Math.max(0,s|0); return String(Math.floor(s/60)).padStart(2,"0")+":"+String(s%60).padStart(2,"0"); }
 function drawCook(){
-  const {r,i}=cook; const [t,txt,sec]=r.steps[i]; const last=i===r.steps.length-1;
-  $("#layer").innerHTML='<div class="cook" role="dialog" aria-modal="true" aria-label="Cooking '+esc(r.name)+'">'+
-    '<div class="cooktop"><div><span class="eyebrow" style="color:#D9C9F2">Cook mode</span><div style="font-family:var(--display);font-weight:800;font-size:18px">'+esc(r.name)+'</div></div><button type="button" class="close" data-act="close" aria-label="Leave cook mode">'+svg("x")+'</button></div>'+
+  const {r,i}=cook; const [ti,txt,sec]=rStep(r,i); const last=i===r.steps.length-1;
+  $("#layer").innerHTML='<div class="cook" role="dialog" aria-modal="true" aria-label="'+esc(rName(r))+'">'+
+    '<div class="cooktop"><div><span class="eyebrow" style="color:#D9C9F2">'+esc(t("cook_mode"))+'</span><div style="font-family:var(--display);font-weight:800;font-size:18px">'+esc(rName(r))+'</div></div><button type="button" class="close" data-act="close" aria-label="'+esc(t("leave_cook"))+'">'+svg("x")+'</button></div>'+
     '<div class="prog">'+r.steps.map((_,k)=>'<i class="'+(k<=i?'on':'')+'"></i>').join("")+'</div>'+
-    '<div class="cookmain"><span class="sn">Step '+(i+1)+' of '+r.steps.length+'</span><h2>'+esc(t)+'</h2><p>'+esc(txt)+'</p>'+
+    '<div class="cookmain"><span class="sn">'+esc(t("step_of",{i:i+1,n:r.steps.length}))+'</span><h2>'+esc(ti)+'</h2><p>'+esc(txt)+'</p>'+
     (sec?'<div class="timer'+(cook.left<=0&&cook.started?' done':'')+'" id="timer"><span class="tv" id="tv">'+fmtT(cook.left)+'</span>'+
-      '<button type="button" class="btn" data-act="t-toggle">'+svg(cook.run?"pause":"play")+(cook.run?'Pause':'Start timer')+'</button><button type="button" class="btn ghost" data-act="t-reset" aria-label="Reset timer">'+svg("reset")+'</button></div>':'')+
-    '</div><div class="cooknav"><button type="button" class="btn ghost" data-act="c-prev"'+(i===0?' disabled':'')+'>Back</button><button type="button" class="btn go" data-act="'+(last?'close':'c-next')+'" data-autofocus>'+(last?'Done, enjoy!':'Next step')+'</button></div></div>';
+      '<button type="button" class="btn" data-act="t-toggle">'+svg(cook.run?"pause":"play")+esc(cook.run?t("pause"):t("start_timer"))+'</button><button type="button" class="btn ghost" data-act="t-reset" aria-label="'+esc(t("reset_timer"))+'">'+svg("reset")+'</button></div>':'')+
+    '</div><div class="cooknav"><button type="button" class="btn ghost" data-act="c-prev"'+(i===0?' disabled':'')+'>'+esc(t("back"))+'</button><button type="button" class="btn go" data-act="'+(last?'close':'c-next')+'" data-autofocus>'+esc(last?t("done"):t("next"))+'</button></div></div>';
   const f=$("#layer").querySelector("[data-autofocus]"); if(f) f.focus();
 }
 function tick(){ if(!cook) return stopTimer(); cook.left--; const tv=$("#tv"); if(tv) tv.textContent=fmtT(cook.left);
@@ -498,36 +699,43 @@ function render(){
   $("#app").innerHTML=v();
   paintArt($("#app")); if(S.tab==="stores") paintMap();
 }
-function rerenderKeepFocus(id){ const pos=document.getElementById(id)?.selectionStart; render(); const el=document.getElementById(id); if(el){ el.focus(); try{ if(pos!=null) el.setSelectionRange(pos,pos);}catch(e){} } }
+function rerenderKeepFocus(id){ const el0=document.getElementById(id); const pos=el0?el0.selectionStart:null; render(); const el=document.getElementById(id); if(el){ el.focus(); try{ if(pos!=null) el.setSelectionRange(pos,pos);}catch(e){} } }
+async function copyText(txt, okMsg){ try{ await navigator.clipboard.writeText(txt); toast(okMsg); }catch(e){ toast(t("t_copy_fail")); } }
 
 document.addEventListener("click",e=>{
-  const tabB=e.target.closest("[data-tab]"); if(tabB){ go(tabB.dataset.tab); return; }
+  const tabB=e.target.closest("[data-tab]"); if(tabB){ if($("#layer").innerHTML) closeLayer(); go(tabB.dataset.tab); return; }
   const b=e.target.closest("[data-act]"); if(!b) return;
   const act=b.dataset.act, id=b.dataset.id;
-  if(act==="close-bg"){ if(e.target===b) closeLayer(); return; }
+  if(act==="close-bg"){ if(e.target===b){ closeLayer(); if(pendingImport){ pendingImport=null; clearHash(); } } return; }
   switch(act){
-    case "add": if(DB.get(id)){ S.items[id]=(S.items[id]||0)+1; save(); render(); toast("Added to your list"); } break;
+    case "add": if(DB.get(id)){ S.items[id]=(S.items[id]||0)+1; save(); render(); toast(t("toast_added")); } break;
     case "inc": if(S.items[id]!=null){ S.items[id]=clamp(S.items[id]+1,1,99); } else { const c=S.custom.find(x=>x.id===id); if(c) c.qty=clamp(c.qty+1,1,99); } save(); render(); break;
     case "dec": if(S.items[id]!=null){ if(S.items[id]<=1) delete S.items[id]; else S.items[id]--; } else { const i=S.custom.findIndex(x=>x.id===id); if(i>=0){ if(S.custom[i].qty<=1) S.custom.splice(i,1); else S.custom[i].qty--; } } save(); render(); break;
     case "check": { const i=S.checked.indexOf(id); if(i>=0) S.checked.splice(i,1); else S.checked.push(id); save(); render(); break; }
-    case "swap": { const r=DB.get(id); if(r&&!isOffer(r)){ S.storePick[id]=storeOf(r)==="ALDI"?"LIDL":"ALDI"; save(); render(); toast("Moved to "+S.storePick[id]); } break; }
-    case "clear-done": for(const cid of S.checked){ delete S.items[cid]; S.custom=S.custom.filter(c=>c.id!==cid); } S.checked=[]; save(); render(); toast("Ticked items removed"); break;
+    case "swap": { const r=DB.get(id); if(r&&!isOffer(r)){ S.storePick[id]=storeOf(r)==="ALDI"?"LIDL":"ALDI"; save(); render(); toast(t("t_moved",{x:S.storePick[id]})); } break; }
+    case "clear-done": for(const cid of S.checked){ delete S.items[cid]; S.custom=S.custom.filter(c=>c.id!==cid); } S.checked=[]; save(); render(); toast(t("t_ticked")); break;
     case "unfav": { const i=+b.dataset.i; if(i>=0&&i<S.favorites.length){ S.favorites.splice(i,1); save(); render(); } break; }
-    case "rebuild": seedFromFavorites(false); S.checked=[]; save(); render(); toast("List rebuilt from favorites"); break;
-    case "merge": seedFromFavorites(true); save(); render(); toast("Favorites added"); break;
-    case "copy": copyList(b); break;
+    case "rebuild": seedFromFavorites(false); S.checked=[]; save(); render(); toast(t("t_rebuilt")); break;
+    case "merge": seedFromFavorites(true); save(); render(); toast(t("t_favs")); break;
+    case "copy": copyText(listText(), t("t_copied")); break;
+    case "copy-link": copyText(shareLink(), t("t_link")); break;
+    case "share-open": shareSheet(); break;
+    case "share-native": { const L=lines(), T=totals(L); try{ navigator.share({title:"Wochenkorb", text:t("share_msg",{n:L.length,total:eur(T.total)}), url:shareLink()}).catch(()=>{}); }catch(err){} break; }
+    case "imp-replace": if(pendingImport){ S.items=pendingImport.items; S.custom=pendingImport.custom; S.menu=pendingImport.menu; S.checked=[]; S.seeded=true; pendingImport=null; clearHash(); save(); closeLayer(); S.tab="list"; render(); toast(t("t_imported")); } break;
+    case "imp-merge": if(pendingImport){ for(const [k,q] of Object.entries(pendingImport.items)) S.items[k]=Math.max(S.items[k]||0,q); for(const c of pendingImport.custom) if(!S.custom.some(x=>DB.fold(x.name)===DB.fold(c.name))&&S.custom.length<100) S.custom.push(c); for(const [d,r] of Object.entries(pendingImport.menu)) if(!S.menu[d]) S.menu[d]=r; S.seeded=true; pendingImport=null; clearHash(); save(); closeLayer(); S.tab="list"; render(); toast(t("t_merged")); } break;
+    case "imp-ignore": pendingImport=null; clearHash(); closeLayer(); break;
     case "dstore": dealStore=b.dataset.v; render(); break;
     case "dcat": dealCat=b.dataset.v; render(); break;
-    case "rfilter": recFilter=b.dataset.v; render(); break;
+    case "rfilter": if(RFILTERS[b.dataset.v]){ recFilter=b.dataset.v; render(); } break;
     case "home": if(DB.get(b.dataset.v)){ S.home=b.dataset.v; save(); render(); } break;
     case "open-recipe": recipeSheet(id); break;
     case "pick-day": dayPicker(b.dataset.day); break;
-    case "set-day": if(DB.tableOf(id)==="recipes"){ S.menu[b.dataset.day]=id; save(); closeLayer(); render(); toast(DAYS[+b.dataset.day]+": "+DB.get(id).name); } break;
+    case "set-day": if(DB.tableOf(id)==="recipes"){ S.menu[b.dataset.day]=id; save(); closeLayer(); render(); toast(t("t_day",{d:dayN(+b.dataset.day),x:rName(DB.get(id))})); } break;
     case "clear-day": delete S.menu[b.dataset.day]; save(); closeLayer(); render(); break;
     case "toggle-week": toggleWeek(id); break;
     case "auto-menu": autoMenu(); break;
-    case "shop-menu": { const n=addMenuToList(); save(); render(); toast(n?n+" ingredients added for the menu":"Everything for the menu is already on your list"); break; }
-    case "recipe-to-list": { const r=DB.get(id); if(r){ const n=addRecipeToList(r); save(); renderNav(); if(S.tab==="list"||S.tab==="home") render(); toast(n?n+" ingredients added":"All ingredients already on your list"); } break; }
+    case "shop-menu": { const n=addMenuToList(); save(); render(); toast(n?t("t_menu_n",{n}):t("t_menu_0")); break; }
+    case "recipe-to-list": { const r=DB.get(id); if(r){ const n=addRecipeToList(r); save(); renderNav(); if(S.tab==="list"||S.tab==="home") render(); toast(n?t("t_rec_n",{n}):t("t_rec_0")); } break; }
     case "cook": startCook(id); break;
     case "close": closeLayer(); render(); break;
     case "c-next": if(cook&&cook.i<cook.r.steps.length-1){ stopTimer(); cook.i++; cook.left=cook.r.steps[cook.i][2]; cook.run=false; cook.started=false; drawCook(); } break;
@@ -539,10 +747,10 @@ document.addEventListener("click",e=>{
 function toggleWeek(id){
   if(DB.tableOf(id)!=="recipes") return;
   const k=Object.keys(S.menu).find(d=>S.menu[d]===id);
-  if(k!=null){ delete S.menu[k]; toast("Removed from the week"); }
+  if(k!=null){ delete S.menu[k]; toast(t("t_week_rm")); }
   else { const free=[0,1,2,3,4,5,6].find(d=>!S.menu[d] && !HOLIDAYS[WEEK_DATES[d]]) ?? [0,1,2,3,4,5,6].find(d=>!S.menu[d]);
-    if(free==null){ toast("The week is full. Clear a day on Home first."); return; }
-    S.menu[free]=id; toast("Planned for "+DAYS[free]); }
+    if(free==null){ toast(t("t_week_full")); return; }
+    S.menu[free]=id; toast(t("t_planned",{d:dayN(free)})); }
   save();
   if($("#layer").innerHTML && DB.get(id)) recipeSheet(id);
   render();
@@ -550,31 +758,24 @@ function toggleWeek(id){
 function autoMenu(){
   const dinners=DB.from("recipes").where(r=>r.meal==="Dinner").orderBy(r=>-(recipeCost(r).deals*3 - recipeCost(r).cost/5)).all();
   let k=0; for(let d=0; d<7 && k<dinners.length; d++){ if(!S.menu[d]) S.menu[d]=dinners[k++].id; }
-  save(); render(); toast("7 dinners planned. Tap a day to change it.");
-}
-async function copyList(b){
-  const L=lines(); const T=totals(L);
-  const txt=["ALDI","LIDL"].map(st=>{const ls=L.filter(l=>l.store===st); if(!ls.length) return "";
-    return (st==="ALDI"?"ALDI SÜD":"LIDL")+"\n"+ls.map(l=>(S.checked.includes(l.id)?"☑ ":"☐ ")+l.qty+"× "+l.name+(l.size?" ("+l.size+")":"")+" – "+eur(l.price*l.qty)).join("\n");}).filter(Boolean).join("\n\n")+"\n\nTotal "+eur(T.total);
-  try{ await navigator.clipboard.writeText(txt); toast("List copied. Paste it into WhatsApp or Notes."); }
-  catch(e){ toast("Copy was blocked on this device"); }
+  save(); render(); toast(t("t_auto"));
 }
 document.addEventListener("input",e=>{
-  const t=e.target;
-  if(t.id==="dealSearch"){ dealQ=t.value.slice(0,40); rerenderKeepFocus("dealSearch"); }
-  if(t.id==="budgetIn"){ const v=parseFloat(t.value); S.budget=isFinite(v)?clamp(Math.round(v),0,2000):0; save(); rerenderKeepFocus("budgetIn"); }
+  const el=e.target;
+  if(el.id==="dealSearch"){ dealQ=el.value.slice(0,40); rerenderKeepFocus("dealSearch"); }
+  if(el.id==="budgetIn"){ const v=parseFloat(el.value); S.budget=isFinite(v)?clamp(Math.round(v),0,2000):0; save(); rerenderKeepFocus("budgetIn"); }
 });
 document.addEventListener("change",e=>{
-  const t=e.target;
-  if(t.id==="dealSort"){ dealSort=["price","cat","name"].includes(t.value)?t.value:"price"; render(); }
-  if(t.id==="bigIn"){ S.big=t.checked; seedFromFavorites(false); save(); render(); toast(S.big?"Quantities increased":"Normal quantities"); }
+  const el=e.target;
+  if(el.id==="dealSort"){ dealSort=["price","cat","name"].includes(el.value)?el.value:"price"; render(); }
+  if(el.id==="bigIn"){ S.big=el.checked; seedFromFavorites(false); save(); render(); toast(S.big?t("t_more"):t("t_normal")); }
 });
 document.addEventListener("keydown",e=>{
   if(e.target.id==="favIn" && (e.key==="Enter"||e.key===",")){
     e.preventDefault(); const v=e.target.value.replace(/[<>]/g,"").trim().slice(0,40);
     if(v && !S.favorites.some(f=>DB.fold(f)===DB.fold(v)) && S.favorites.length<60){
       S.favorites.push(v); const m=DB.match(v); if(m && !S.items[m.row.id]) S.items[m.row.id]=favQty(m.row);
-      save(); rerenderKeepFocus("favIn"); toast(m?"Added "+m.row.name:"No price found for "+v);
+      save(); rerenderKeepFocus("favIn"); toast(m?t("t_added",{x:m.row.name}):t("t_noprice",{x:v}));
     }
   }
   if(e.key==="Escape" && $("#layer").innerHTML){ closeLayer(); render(); }
@@ -583,18 +784,25 @@ document.addEventListener("submit",e=>{
   if(e.target.id!=="addForm") return; e.preventDefault();
   const name=$("#addName").value.replace(/[<>]/g,"").trim().slice(0,60); const price=parseFloat($("#addPrice").value.replace(",","."));
   if(!name){ $("#addName").focus(); return; }
-  if(!isFinite(price)||price<0||price>500){ $("#addPrice").focus(); toast("Enter a price between 0 and 500 €"); return; }
-  if(S.custom.length>=100){ toast("Your list is full"); return; }
-  const id="c-"+Math.random().toString(36).slice(2,10);
-  S.custom.push({id,name,price:Math.round(price*100)/100,store:$("#addStore").value==="LIDL"?"LIDL":"ALDI",qty:1});
-  save(); render(); toast("Added "+name);
+  if(!isFinite(price)||price<0||price>500){ $("#addPrice").focus(); toast(t("t_price_range")); return; }
+  if(S.custom.length>=100){ toast(t("t_full")); return; }
+  const cid="c-"+Math.random().toString(36).slice(2,10);
+  S.custom.push({id:cid,name,price:Math.round(price*100)/100,store:$("#addStore").value==="LIDL"?"LIDL":"ALDI",qty:1});
+  save(); render(); toast(t("t_added",{x:name}));
 });
-$("#locBtn").addEventListener("click",()=>{ S.home=S.home==="Bolanden"?"Kaiserslautern":"Bolanden"; save(); render(); toast("Location: "+S.home); });
+$("#locBtn").addEventListener("click",()=>{ S.home=S.home==="Bolanden"?"Kaiserslautern":"Bolanden"; save(); render(); toast(t("toast_loc",{x:S.home})); });
+const langBtn=$("#langBtn"); if(langBtn) langBtn.addEventListener("click",()=>{ S.lang=de()?"en":"de"; save(); if(cook) drawCook(); else if($("#layer").innerHTML) closeLayer(); render(); });
 let rz=null; window.addEventListener("resize",()=>{ clearTimeout(rz); rz=setTimeout(()=>{ paintArt(document); if(S.tab==="stores") paintMap(); },150); });
 document.addEventListener("visibilitychange",()=>{ if(document.visibilityState==="visible" && cook) grabWake(); });
-if(window.matchMedia) window.matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change",()=>{ if(S.tab==="stores") paintMap(); });
+window.addEventListener("online",()=>render()); window.addEventListener("offline",()=>render());
+window.addEventListener("hashchange",()=>{ const imp=readImport(); if(imp) importSheet(imp); });
+if(window.matchMedia){ const mq=window.matchMedia("(prefers-color-scheme: dark)"); if(mq.addEventListener) mq.addEventListener("change",()=>{ if(S.tab==="stores") paintMap(); }); }
+
+/* offline support on the real site (not inside the Claude preview) */
+try{ if("serviceWorker" in navigator && /\.github\.io$/.test(location.hostname)) navigator.serviceWorker.register("sw.js").catch(()=>{}); }catch(e){}
 
 /* first run: build the list from the example favorites */
 if(!S.seeded){ seedFromFavorites(false); save(); }
 render();
+const firstImport=readImport(); if(firstImport) importSheet(firstImport);
 })();
