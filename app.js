@@ -18,7 +18,7 @@ const DB = (function(){
   }
   const fold = s => String(s == null ? "" : s).toLowerCase()
       .replace(/ä/g,"ae").replace(/ö/g,"oe").replace(/ü/g,"ue").replace(/ß/g,"ss")
-      .normalize("NFD").replace(/[̀-ͯ]/g,"").trim();
+      .normalize("NFD").replace(/[\u0300-\u036f]/g,"").trim();
   function textOf(r){ return fold([r.name, r.de, r.category, r.store, r.chain, r.town, r.street].concat(r.tags||[]).join(" ")); }
   class Query{
     constructor(t){ this.rows = (tables[t]||[]).slice(); }
@@ -54,6 +54,7 @@ const DB = (function(){
             if(f.length>=3 && (g.split(/[\s-]+/).includes(f)||f.split(/[\s-]+/).includes(g))) s=Math.max(s,2);
             else if(f.length>=4 && (g.includes(f)||(f.includes(g)&&g.length>=4))) s=Math.max(s,1);
           }
+          if(fold(r.name)===f) s=4;
           if(!s && f.length>=4 && fold(r.name).includes(f)) s=1;
           if(!s) continue;
           const bonus = t==="offers"?0.5:0;
@@ -129,11 +130,13 @@ const KEY = "wochenkorb.v2";
 const DEFAULT_FAVS = ["chicken","Hackfleisch","pasta","rice","potatoes","eggs","milk","cheese","bread","broccoli","bananas","apples","yogurt","coffee"];
 const DEFAULT_LANG = (()=>{ try{ return /^de/i.test(navigator.language||"") ? "de" : "en"; }catch(e){ return "en"; } })();
 function freshState(){ return {v:2, lang:DEFAULT_LANG, week:META.validFrom, favorites:DEFAULT_FAVS.slice(), budget:160, big:true, home:"Bolanden",
-  items:{}, custom:[], checked:[], storePick:{}, menu:{}, tab:"home", seeded:false}; }
+  items:{}, custom:[], checked:[], storePick:{}, menu:{}, favIds:{}, tab:"home", seeded:false}; }
+function isListable(id){ const tb=typeof id==="string"?DB.tableOf(id):null; return tb==="offers"||tb==="staples"; }
 function sanitize(s){
   const d = freshState(); if(!s || typeof s!=="object") return d;
   const str = (x,n) => typeof x==="string" ? x.slice(0,n) : null;
-  if(Array.isArray(s.favorites)) d.favorites = s.favorites.map(x=>str(x,40)).filter(Boolean).slice(0,60);
+  if(Array.isArray(s.favorites)) d.favorites = s.favorites.map(x=>str(x,60)).filter(Boolean).slice(0,60);
+  if(s.favIds && typeof s.favIds==="object") for(const [k,v] of Object.entries(s.favIds)) if(typeof k==="string"&&k.length<=80&&isListable(v)) d.favIds[k]=v;
   if(typeof s.budget==="number" && isFinite(s.budget)) d.budget = clamp(Math.round(s.budget),0,2000);
   d.big = !!s.big;
   if(s.lang==="de"||s.lang==="en") d.lang = s.lang;
@@ -142,14 +145,14 @@ function sanitize(s){
   d.seeded = !!s.seeded;
   const sameWeek = s.week===META.validFrom;
   if(s.items && typeof s.items==="object") for(const [k,v] of Object.entries(s.items)){
-    if(DB.get(k) && Number.isInteger(v) && v>0) d.items[k]=clamp(v,1,99);
+    if(isListable(k) && Number.isInteger(v) && v>0) d.items[k]=clamp(v,1,99);
   }
   if(Array.isArray(s.custom)) d.custom = s.custom.slice(0,100).map(c=>({
       id: typeof c.id==="string" && /^c-[a-z0-9]{1,16}$/.test(c.id) ? c.id : null,
       name: str(c.name,60), price: clamp(+c.price||0,0,500), store: c.store==="LIDL"?"LIDL":"ALDI", qty: clamp(parseInt(c.qty)||1,1,99)
     })).filter(c=>c.id&&c.name);
   if(sameWeek && Array.isArray(s.checked)) d.checked = s.checked.filter(x=>typeof x==="string").slice(0,300);
-  if(s.storePick && typeof s.storePick==="object") for(const [k,v] of Object.entries(s.storePick)) if(DB.get(k)&&(v==="ALDI"||v==="LIDL")) d.storePick[k]=v;
+  if(s.storePick && typeof s.storePick==="object") for(const [k,v] of Object.entries(s.storePick)) if(DB.tableOf(k)==="staples"&&(v==="ALDI"||v==="LIDL")) d.storePick[k]=v;
   if(sameWeek && s.menu && typeof s.menu==="object") for(const [k,v] of Object.entries(s.menu)) if(/^[0-6]$/.test(k) && DB.tableOf(v)==="recipes") d.menu[k]=v;
   return d;
 }
@@ -166,8 +169,9 @@ function storeOf(r){
   return r.priceLidl<r.priceAldi ? "LIDL" : "ALDI";
 }
 function priceOf(r){ if(isOffer(r)) return r.price; return storeOf(r)==="LIDL"?r.priceLidl:r.priceAldi; }
-function favQty(r){ const b=r.weeklyQty||1; return b>=2 ? Math.ceil(b*(S.big?1.25:1)-0.001) : b; }
-function favMatches(){ return S.favorites.map(f=>({fav:f, m:DB.match(f)})); }
+function favQtyFor(r,big){ const b=r.weeklyQty||1; return b>=2 ? Math.ceil(b*(big?1.25:1)-0.001) : b; }
+function favQty(r){ return favQtyFor(r,S.big); }
+function favMatches(){ return S.favorites.map(f=>{ const pin=S.favIds[DB.fold(f)]; return {fav:f, m: pin&&DB.get(pin) ? {row:DB.get(pin)} : DB.match(f)}; }); }
 function seedFromFavorites(merge){
   if(!merge) S.items={};
   for(const {m} of favMatches()) if(m && !S.items[m.row.id]) S.items[m.row.id]=favQty(m.row);
@@ -208,13 +212,15 @@ function addMenuToList(){
 function haversine(a,b){ const R=6371, t=x=>x*Math.PI/180; const dLa=t(b.lat-a.lat), dLo=t(b.lng-a.lng);
   const h=Math.sin(dLa/2)**2+Math.cos(t(a.lat))*Math.cos(t(b.lat))*Math.sin(dLo/2)**2; return 2*R*Math.asin(Math.sqrt(h)); }
 function home(){ return DB.get(S.home); }
+const wdIdx = iso => (new Date(iso+"T12:00:00Z").getUTCDay()+6)%7;
+function nextOpenDay(fromIso){ for(let k=1;k<=8;k++){ const d=addDays(fromIso,k); if(wdIdx(d)!==6 && !HOLIDAYS[d]) return wdIdx(d); } return 0; }
 function storeStatus(st){
   const n=berlinNow(); const toM=s=>{const [h,m]=s.split(":");return +h*60+ +m;};
-  if(HOLIDAYS[n.date]) return {open:false,code:"st_holiday"};
-  if(n.wd==="Sun") return {open:false,code:"st_sunday",time:st.open};
   const o=toM(st.open), c=toM(st.close);
+  if(HOLIDAYS[n.date]) return {open:false,code:"st_holiday_next",day:nextOpenDay(n.date),time:st.open};
+  if(n.wd==="Sun") return {open:false,code:"st_closed_next",day:nextOpenDay(n.date),time:st.open};
   if(n.mins<o) return {open:false,code:"st_opens",time:st.open};
-  if(n.mins>=c) return {open:false,code:"st_closed",time:st.open};
+  if(n.mins>=c) return {open:false,code:"st_closed_next",day:nextOpenDay(n.date),time:st.open};
   if(c-n.mins<=45) return {open:true,soon:true,code:"st_closes",time:st.close};
   return {open:true,code:"st_open",time:st.close};
 }
@@ -238,9 +244,9 @@ const STR = {
     shop_menu:"Shop for this menu", fill_week:"Fill the week for me", today:"today", plan_dinner:"+ Plan dinner", tap_plan:"tap to plan",
     nearest:"Nearest stores", all_stores:"All stores",
     hol_is:"{day} {date} is {name}", hol_tail:"Stores are closed that day, so plan your shopping around it.",
-    stale:"These deals ended on {date}. New deals arrive Monday morning; your list still works with shelf prices.",
+    stale:"These deals ended on {date} New deals arrive Monday morning; your list still works with shelf prices.",
     offline:"You're offline. Showing the deals saved on this phone.",
-    valid:"valid Mo {from} – Sa {to}", weekly_deals:"Weekly deals", search_ph:"Search: cheese, Käse, pasta, Kaffee…", search_lbl:"Search deals",
+    valid:"valid Mon {from} – Sat {to}", weekly_deals:"Weekly deals", search_ph:"Search: cheese, Käse, pasta, Kaffee…", search_lbl:"Search deals",
     all:"All", sort_price:"Cheapest first", sort_aisle:"By aisle", sort_name:"A–Z", n_deals:"{n} deals", store:"Store", category:"Category",
     no_deals:"No deals match. Try another word or clear the filters.",
     one_less:"One less", one_more:"One more", add_x:"Add {x} to list",
@@ -257,7 +263,7 @@ const STR = {
     f_all:"All", f_dinner:"Dinner", f_breakfast:"Breakfast", f_quick:"Under 30 min", f_deals:"Most deals",
     deals_n:"{n} deals", deal_1:"1 deal", per_person:"{x} per person", in_week:"In week", add_week:"+ Week", recipe:"Recipe",
     meal_Dinner:"Dinner", meal_Breakfast:"Breakfast", lvl_Easy:"Easy", lvl_Medium:"Medium", min:"min",
-    stores_eyebrow:"Hours Mo–Sa · Sundays and holidays closed", stores_title:"Stores near you", your_loc:"Your location",
+    stores_eyebrow:"Hours Mon–Sat · Sundays and holidays closed", stores_title:"Stores near you", your_loc:"Your location",
     km_from:"km from {x}", directions:"Directions", map_aria:"Map of stores around Bolanden and Kaiserslautern",
     stores_note:"Weekly Prospekt deals are the same across ALDI SÜD and LIDL stores in the region, but stock varies by branch. Bolanden has no discounter of its own; the nearest are in Kirchheimbolanden.",
     st_holiday:"Closed today (holiday)", st_sunday:"Closed Sunday · opens Mon {t}", st_opens:"Opens {t}", st_closed:"Closed · opens {t}", st_closes:"Closes {t}", st_open:"Open until {t}",
@@ -279,11 +285,13 @@ const STR = {
     share_native:"Share…", share_wa:"Send with WhatsApp", share_copy_link:"Copy link", share_copy_text:"Copy as plain text",
     share_msg:"Our shopping list for this week ({n} items, {total}). Open it in Wochenkorb:",
     imp_title:"A shopping list was shared with you", imp_sub:"{n} items · {total}{menu}", imp_menu:" · {n} dinners planned",
-    imp_replace:"Use this list", imp_merge:"Add to my list", imp_ignore:"Ignore", imp_old:"This list is from an older week. Items that are no longer on sale use shelf prices.",
+    imp_replace:"Use this list", imp_merge:"Add to my list", imp_ignore:"Ignore", imp_old:"This list is from an older week. Items that are no longer on sale were added with the price from that week; its dinners were not copied.",
     t_imported:"List loaded", t_merged:"Items added to your list",
     copy_head:"Shopping list", copy_total:"Total",
     add_item:"Add to list", add_search_ph:"Type a product: Milch, chicken, Käse…", add_own:"Add with this price", sug_none:"Not in this week's data. Enter the price you see and tap add.",
-    on_list:"on list", buy_at:"Buy at {x} instead"
+    on_list:"on list", buy_at:"Buy at {x} instead",
+    planned_now:"Planned now", or_pick:"Or pick another dinner:", sort:"Sort", sections:"Sections", mon_sat:"Mon–Sat", no_budget:"No budget set",
+    st_holiday_next:"Closed today (holiday) · opens {d} {t}", st_closed_next:"Closed · opens {d} {t}"
   },
   de:{
     tab_home:"Start", tab_deals:"Angebote", tab_list:"Liste", tab_recipes:"Rezepte", tab_stores:"Märkte",
@@ -297,7 +305,7 @@ const STR = {
     shop_menu:"Für dieses Menü einkaufen", fill_week:"Woche für mich planen", today:"heute", plan_dinner:"+ Abendessen planen", tap_plan:"zum Planen tippen",
     nearest:"Nächste Märkte", all_stores:"Alle Märkte",
     hol_is:"{day} {date} ist {name}", hol_tail:"Die Märkte sind an diesem Tag geschlossen, also Einkauf entsprechend planen.",
-    stale:"Diese Angebote endeten am {date}. Neue Angebote kommen Montagfrüh; deine Liste funktioniert weiter mit Regalpreisen.",
+    stale:"Diese Angebote endeten am {date} Neue Angebote kommen Montagfrüh; deine Liste funktioniert weiter mit Regalpreisen.",
     offline:"Du bist offline. Es werden die auf diesem Handy gespeicherten Angebote angezeigt.",
     valid:"gültig Mo {from} – Sa {to}", weekly_deals:"Wochenangebote", search_ph:"Suchen: Käse, Nudeln, Kaffee…", search_lbl:"Angebote suchen",
     all:"Alle", sort_price:"Günstigste zuerst", sort_aisle:"Nach Regal", sort_name:"A–Z", n_deals:"{n} Angebote", store:"Markt", category:"Kategorie",
@@ -338,11 +346,13 @@ const STR = {
     share_native:"Teilen…", share_wa:"Mit WhatsApp senden", share_copy_link:"Link kopieren", share_copy_text:"Als Text kopieren",
     share_msg:"Unsere Einkaufsliste für diese Woche ({n} Artikel, {total}). In Wochenkorb öffnen:",
     imp_title:"Dir wurde eine Einkaufsliste geschickt", imp_sub:"{n} Artikel · {total}{menu}", imp_menu:" · {n} Abendessen geplant",
-    imp_replace:"Diese Liste nutzen", imp_merge:"Zu meiner Liste hinzufügen", imp_ignore:"Ignorieren", imp_old:"Diese Liste ist aus einer älteren Woche. Artikel, die nicht mehr im Angebot sind, nutzen Regalpreise.",
+    imp_replace:"Diese Liste nutzen", imp_merge:"Zu meiner Liste hinzufügen", imp_ignore:"Ignorieren", imp_old:"Diese Liste ist aus einer älteren Woche. Artikel, die nicht mehr im Angebot sind, wurden mit dem damaligen Preis übernommen; die Abendessen wurden nicht übernommen.",
     t_imported:"Liste geladen", t_merged:"Artikel zu deiner Liste hinzugefügt",
     copy_head:"Einkaufsliste", copy_total:"Gesamt",
     add_item:"Zur Liste hinzufügen", add_search_ph:"Produkt eingeben: Milch, Hähnchen, Käse…", add_own:"Mit diesem Preis hinzufügen", sug_none:"Nicht in den Daten dieser Woche. Preis aus dem Markt eingeben und hinzufügen.",
-    on_list:"auf der Liste", buy_at:"Stattdessen bei {x} kaufen"
+    on_list:"auf der Liste", buy_at:"Stattdessen bei {x} kaufen",
+    planned_now:"Aktuell geplant", or_pick:"Oder ein anderes Abendessen wählen:", sort:"Sortieren", sections:"Bereiche", mon_sat:"Mo–Sa", no_budget:"Kein Budget gesetzt",
+    st_holiday_next:"Heute geschlossen (Feiertag) · öffnet {d} {t}", st_closed_next:"Geschlossen · öffnet {d} {t}"
   }
 };
 const CAT_DE = {Meat:"Fleisch",Fish:"Fisch",Dairy:"Molkerei",Cheese:"Käse",Produce:"Obst & Gemüse",Bakery:"Backwaren",Pantry:"Vorrat",Frozen:"Tiefkühl",Drinks:"Getränke",Snacks:"Süßes & Snacks","Coffee & tea":"Kaffee & Tee",Breakfast:"Frühstück",Household:"Haushalt",Added:"Selbst hinzugefügt"};
@@ -359,6 +369,7 @@ const rName = r => de() ? (r.de||r.name) : r.name;
 const rAlt = r => de() ? r.name : (r.de||"");
 const rBlurb = r => de() && r.deBlurb ? r.deBlurb : r.blurb;
 const rIngLabel = (r,i) => de() && r.deIng && r.deIng[i] ? r.deIng[i] : r.ing[i][1];
+const rAmt = (r,i) => de() && r.deAmt && r.deAmt[i]!=null ? r.deAmt[i] : r.ing[i][2];
 const rStep = (r,i) => de() && r.deSteps && r.deSteps[i] ? [r.deSteps[i][0], r.deSteps[i][1], r.steps[i][2]] : r.steps[i];
 const km = x => de() ? x.toFixed(1).replace(".",",") : x.toFixed(1);
 
@@ -370,6 +381,7 @@ function renderNav(){
   $("#tabsDesk").innerHTML = TABS.map(([id,lab])=>'<button type="button" data-tab="'+id+'"'+(S.tab===id?' aria-current="page"':'')+'>'+esc(t(lab))+(id==="list"&&cnt?' · '+cnt:'')+'</button>').join("");
   $("#locName").textContent = S.home;
   $("#locBtn").setAttribute("aria-label", t("loc_aria"));
+  document.querySelectorAll("nav[aria-label]").forEach(n=>n.setAttribute("aria-label",t("sections")));
   const lb=$("#langBtn"); if(lb){ lb.textContent=t("lang_btn"); lb.setAttribute("aria-label",t("lang_aria")); }
   document.documentElement.lang = S.lang;
 }
@@ -408,13 +420,13 @@ function viewHome(){
   const top=[...new Set(picks)].slice(0,6).concat(extra);
   const n=berlinNow(); const nOff=DB.from("offers").count();
   const week = DAYS.map((d,i)=>{ const date=WEEK_DATES[i]; const rid=S.menu[i]; const r=rid&&DB.get(rid); const hol=HOLIDAYS[date];
-    return '<button type="button" class="day'+(r?'':' empty-day')+(hol?' holiday':'')+'" data-act="'+(r?'open-recipe':'pick-day')+'" data-id="'+esc(r?r.id:"")+'" data-day="'+i+'">'+
+    return '<button type="button" class="day'+(r?'':' empty-day')+(hol?' holiday':'')+'" data-act="pick-day" data-day="'+i+'">'+
       '<span class="dn">'+esc(dayN(i))+' '+fmtD(date)+(date===n.date?' · '+esc(t("today")):'')+'</span>'+(r?'<h4>'+esc(rName(r))+'</h4>':'<span>'+(hol?esc(holN(hol))+' · '+esc(t("tap_plan")):esc(t("plan_dinner")))+'</span>')+'</button>'; }).join("");
   const nA=nearest("ALDI"), nL=nearest("LIDL");
   const menuCount=Object.keys(S.menu).length;
   return '<section class="view">'+
     '<div class="hero">'+
-      '<div><span class="wk"><b>'+esc(META.weekLabel)+'</b>Mo '+fmtD(META.validFrom)+' – Sa '+fmtD(META.validTo)+'</span>'+
+      '<div><span class="wk"><b>'+esc(META.weekLabel)+'</b>'+esc(dayN(0))+' '+fmtD(META.validFrom)+' – '+esc(dayN(5))+' '+fmtD(META.validTo)+'</span>'+
       '<h1><em>'+esc(t("hero_deals",{n:nOff}))+'</em> '+esc(t("hero_rest"))+'</h1>'+
       '<p>'+esc(t("hero_list",{total:eur(T.total),n:T.count}))+' '+(T.b?esc(T.left>=0?t("hero_left",{left:eur(T.left),b:eur(T.b)}):t("hero_over",{over:eur(-T.left)})):'')+'</p>'+
       '<div class="acts"><button type="button" class="btn" data-tab="list">'+svg("cart")+esc(t("open_list"))+'</button><button type="button" class="btn ghost" data-tab="recipes">'+svg("pot")+esc(t("deal_recipes"))+'</button></div></div>'+
@@ -447,7 +459,7 @@ function viewDeals(){
     '<div class="tools">'+
       '<label class="searchbox"><span class="sr">'+esc(t("search_lbl"))+'</span>'+svg("search")+'<input class="input" id="dealSearch" type="search" maxlength="40" autocomplete="off" placeholder="'+esc(t("search_ph"))+'" value="'+esc(dealQ)+'"></label>'+
       '<div class="tooln"><div class="seg" role="group" aria-label="'+esc(t("store"))+'">'+["All","ALDI","LIDL"].map(s=>'<button type="button" data-act="dstore" data-v="'+s+'" aria-pressed="'+(dealStore===s)+'">'+esc(s==="All"?t("all"):s)+'</button>').join("")+'</div>'+
-      '<label class="sr" for="dealSort">Sort</label><select class="input" id="dealSort"><option value="price"'+(dealSort==="price"?" selected":"")+'>'+esc(t("sort_price"))+'</option><option value="cat"'+(dealSort==="cat"?" selected":"")+'>'+esc(t("sort_aisle"))+'</option><option value="name"'+(dealSort==="name"?" selected":"")+'>'+esc(t("sort_name"))+'</option></select>'+
+      '<label class="sr" for="dealSort">'+esc(t("sort"))+'</label><select class="input" id="dealSort"><option value="price"'+(dealSort==="price"?" selected":"")+'>'+esc(t("sort_price"))+'</option><option value="cat"'+(dealSort==="cat"?" selected":"")+'>'+esc(t("sort_aisle"))+'</option><option value="name"'+(dealSort==="name"?" selected":"")+'>'+esc(t("sort_name"))+'</option></select>'+
       '<span class="count" id="dealCount" aria-live="polite">'+esc(t("n_deals",{n:rows.length}))+'</span></div>'+
       '<div class="chiprow" role="group" aria-label="'+esc(t("category"))+'">'+cats.map(c=>'<button type="button" class="chip" data-act="dcat" data-v="'+esc(c)+'" aria-pressed="'+(dealCat===c)+'">'+(c==="All"?"":svg(c))+esc(c==="All"?t("all"):cat(c))+'</button>').join("")+'</div>'+
     '</div>'+
@@ -461,7 +473,7 @@ function summaryHTML(){
   const lab={ok:t("on_budget"),warn:t("near_budget"),bad:t("over_budget")}[T.state];
   return '<div class="card summary" id="sumCard"><div><span class="eyebrow">'+esc(t("total"))+'</span><div class="big">'+eur(T.total)+'</div></div>'+
     '<div><div class="bar '+T.state+'"><i style="width:'+pct.toFixed(1)+'%"></i></div>'+
-    '<div class="stats"><span class="pill '+T.state+'">'+esc(lab)+'</span><span>'+esc(t("budget"))+' <b>'+eur(T.b)+'</b></span><span>'+esc(T.left>=0?t("left"):t("over_by"))+' <b>'+eur(Math.abs(T.left))+'</b></span><span>'+esc(t("on_sale"))+' <b>'+eur(T.sale)+'</b></span><span><b>'+T.count+'</b> '+esc(t("packs"))+'</span></div></div></div>';
+    '<div class="stats">'+(T.b?'<span class="pill '+T.state+'">'+esc(lab)+'</span><span>'+esc(t("budget"))+' <b>'+eur(T.b)+'</b></span><span>'+esc(T.left>=0?t("left"):t("over_by"))+' <b>'+eur(Math.abs(T.left))+'</b></span>':'<span class="pill info">'+esc(t("no_budget"))+'</span>')+'<span>'+esc(t("on_sale"))+' <b>'+eur(T.sale)+'</b></span><span><b>'+T.count+'</b> '+esc(t("packs"))+'</span></div></div></div>';
 }
 /* product suggestions while typing: searches this week's deals first, then everyday items */
 function suggestRows(q, limit){
@@ -534,7 +546,7 @@ function recipeCard(r){
     '<div class="rbody"><h3>'+esc(rName(r))+'</h3>'+(rAlt(r)?'<span class="de">'+esc(rAlt(r))+'</span>':'')+'<p>'+esc(rBlurb(r))+'</p>'+
     '<div class="row"><span class="pill bad">'+esc(c.deals===1?t("deal_1"):t("deals_n",{n:c.deals}))+'</span><span class="pill info">'+esc(t("lvl_"+r.level))+'</span></div>'+
     '<div class="rfoot"><div class="rcost"><b class="num">'+eur(c.cost)+'</b><span>'+esc(t("per_person",{x:eur(c.per)}))+'</span></div>'+
-    '<div class="row"><button type="button" class="btn sm'+(inWeek?' inweek':'')+'" data-act="toggle-week" data-id="'+esc(r.id)+'">'+(inWeek?svg("check")+esc(t("in_week")):esc(t("add_week")))+'</button><button type="button" class="btn sm primary" data-act="open-recipe" data-id="'+esc(r.id)+'">'+esc(t("recipe"))+'</button></div></div></div></article>';
+    '<div class="row">'+(r.meal==="Dinner"?'<button type="button" class="btn sm'+(inWeek?' inweek':'')+'" data-act="toggle-week" data-id="'+esc(r.id)+'">'+(inWeek?svg("check")+esc(t("in_week")):esc(t("add_week")))+'</button>':'')+'<button type="button" class="btn sm primary" data-act="open-recipe" data-id="'+esc(r.id)+'">'+esc(t("recipe"))+'</button></div></div></div></article>';
 }
 const RFILTERS={f_all:()=>true,f_dinner:r=>r.meal==="Dinner",f_breakfast:r=>r.meal==="Breakfast",f_quick:r=>r.mins<=30,f_deals:()=>true};
 function viewRecipes(){
@@ -550,8 +562,8 @@ function viewRecipes(){
 function storeCard(x){
   const {s}=x; const st=storeStatus(s);
   return '<article class="card scard"><div class="st"><span class="store-tag '+esc(s.chain)+'">'+(s.chain==="ALDI"?"ALDI SÜD":"LIDL")+'</span>'+
-    '<span class="pill '+(st.open?(st.soon?'warn':'ok'):'bad')+'">'+svg("clock",' width="13" height="13"')+esc(t(st.code,{t:st.time}))+'</span></div>'+
-    '<div><h3>'+esc(s.street)+'</h3><p class="addr">'+esc(s.zip)+' '+esc(s.town)+' · Mo–Sa '+esc(s.open)+'–'+esc(s.close)+'</p></div>'+
+    '<span class="pill '+(st.open?(st.soon?'warn':'ok'):'bad')+'">'+svg("clock",' width="13" height="13"')+esc(t(st.code,{t:st.time,d:st.day!=null?dayN(st.day):""}))+'</span></div>'+
+    '<div><h3>'+esc(s.street)+'</h3><p class="addr">'+esc(s.zip)+' '+esc(s.town)+' · '+esc(t("mon_sat"))+' '+esc(s.open)+'–'+esc(s.close)+'</p></div>'+
     '<div class="sfoot"><span class="dist">'+km(x.km)+' <small>'+esc(t("km_from",{x:S.home}))+'</small></span>'+
     '<a class="btn sm primary" href="'+esc(mapsUrl(s))+'" target="_blank" rel="noopener noreferrer">'+svg("nav")+esc(t("directions"))+'</a></div></article>';
 }
@@ -634,7 +646,7 @@ function closeLayer(){ stopTimer(); releaseWake(); cook=null; $("#layer").innerH
 const sheet = (label, inner) => '<div class="sheet-wrap" data-act="close-bg"><div class="sheet" role="dialog" aria-modal="true" aria-label="'+esc(label)+'">'+inner+'</div></div>';
 function recipeSheet(id){
   const r=DB.get(id); if(!r||DB.tableOf(id)!=="recipes") return; const c=recipeCost(r); const inWeek=Object.values(S.menu).includes(r.id);
-  const ing=r.ing.map(([ref,,amt],i)=>{ const it=ref&&DB.get(ref); const deal=it&&isOffer(it);
+  const ing=r.ing.map(([ref],i)=>{ const amt=rAmt(r,i); const it=ref&&DB.get(ref); const deal=it&&isOffer(it);
     return '<div class="ing"><span class="dot'+(deal?' deal':'')+'"></span><div><div class="lnm">'+esc(rIngLabel(r,i))+'</div><div class="lmeta">'+(amt?'<span>'+esc(amt)+'</span>':'')+
       (it?'<span class="store-tag '+storeOf(it)+'">'+storeOf(it)+'</span><span>'+esc(it.name)+'</span>':'<span>'+esc(t("pantry"))+'</span>')+'</div></div>'+
       (it?'<span class="lprice">'+(deal?'<span class="sale">'+esc(t("angebot"))+'</span> ':'')+eur(priceOf(it))+'</span>':'<span></span>')+'</div>'; }).join("");
@@ -646,7 +658,7 @@ function recipeSheet(id){
     '<div class="sheetacts"><button type="button" class="btn hot" data-act="cook" data-id="'+esc(r.id)+'">'+svg("play")+esc(t("start_cooking"))+'</button><button type="button" class="btn primary" data-act="recipe-to-list" data-id="'+esc(r.id)+'">'+svg("cart")+esc(t("ing_to_list"))+'</button></div>'+
     '<section class="sec"><h3 style="font-size:19px">'+esc(t("ingredients"))+'</h3><div class="card" style="padding:4px 16px">'+ing+'</div><p class="muted small">'+esc(t("ing_note"))+'</p></section>'+
     '<section class="sec"><h3 style="font-size:19px">'+esc(t("method"))+'</h3><ol class="steps">'+steps+'</ol></section>'+
-    '<button type="button" class="btn'+(inWeek?' inweek':'')+'" data-act="toggle-week" data-id="'+esc(r.id)+'">'+(inWeek?svg("check")+esc(t("in_menu")):esc(t("add_menu")))+'</button>'+
+    (r.meal==="Dinner"?'<button type="button" class="btn'+(inWeek?' inweek':'')+'" data-act="toggle-week" data-id="'+esc(r.id)+'">'+(inWeek?svg("check")+esc(t("in_menu")):esc(t("add_menu")))+'</button>':'')+
     '</div>'));
 }
 function dayPicker(day){
@@ -654,7 +666,7 @@ function dayPicker(day){
   const rows=DB.from("recipes").where(r=>r.meal==="Dinner").orderBy(r=>recipeCost(r).cost).all();
   openLayer(sheet(t("pick_dinner"),
     '<div class="sheetbody"><div class="sechead"><div><span class="eyebrow">'+esc(dayN(d))+' '+fmtD(WEEK_DATES[d])+'</span><h2 style="font-size:24px">'+esc(t("pick_dinner"))+'</h2></div><button type="button" class="btn sm" data-act="close" data-autofocus>'+esc(t("close"))+'</button></div>'+
-    (S.menu[d]?'<button type="button" class="btn" data-act="clear-day" data-day="'+d+'">'+esc(t("clear_day",{d:dayN(d)}))+'</button>':'')+
+    (S.menu[d]&&DB.get(S.menu[d])?'<div class="card planned"><span class="eyebrow">'+esc(t("planned_now"))+'</span><b>'+esc(rName(DB.get(S.menu[d])))+'</b><div class="row"><button type="button" class="btn sm primary" data-act="open-recipe" data-id="'+esc(S.menu[d])+'">'+esc(t("recipe"))+'</button><button type="button" class="btn sm" data-act="clear-day" data-day="'+d+'">'+esc(t("clear_day",{d:dayN(d)}))+'</button></div></div><p class="muted small">'+esc(t("or_pick"))+'</p>':'')+
     rows.map(r=>{const c=recipeCost(r);return '<button type="button" class="card pickrow" data-act="set-day" data-day="'+d+'" data-id="'+esc(r.id)+'"><span class="ico c-'+esc(r.color)+'">'+svg("pot")+'</span><span style="flex:1"><b style="display:block">'+esc(rName(r))+'</b><span class="muted small">'+r.mins+' '+esc(t("min"))+' · '+esc(c.deals===1?t("deal_1"):t("deals_n",{n:c.deals}))+'</span></span><span class="num">'+eur(c.cost)+'</span></button>';}).join("")+
     '</div>'));
 }
@@ -664,7 +676,8 @@ const SITE_URL = "https://mattyicematrix.github.io/wochenkorb/";
 function b64urlEncode(str){ const bytes=new TextEncoder().encode(str); let bin=""; bytes.forEach(b=>bin+=String.fromCharCode(b)); return btoa(bin).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,""); }
 function b64urlDecode(s){ s=s.replace(/-/g,"+").replace(/_/g,"/"); while(s.length%4) s+="="; const bin=atob(s); const bytes=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i); return new TextDecoder().decode(bytes); }
 function shareLink(){
-  const p={v:1,w:META.validFrom,i:S.items,c:S.custom.map(c=>[c.name,c.price,c.store,c.qty]),m:S.menu};
+  const sp={}, nm={}; for(const id of Object.keys(S.items)){ if(S.storePick[id]) sp[id]=S.storePick[id]; const r=DB.get(id); if(r&&isOffer(r)) nm[id]=[r.name,r.price,r.store]; }
+  const p={v:1,w:META.validFrom,i:S.items,c:S.custom.map(c=>[c.name,c.price,c.store,c.qty]),m:S.menu,s:sp,n:nm};
   return SITE_URL+"#l="+b64urlEncode(JSON.stringify(p));
 }
 function listText(){
@@ -689,10 +702,14 @@ function readImport(){
   if(!h.startsWith("#l=") || h.length>16000) return null;
   let p; try{ p=JSON.parse(b64urlDecode(h.slice(3))); }catch(e){ return null; }
   if(!p||typeof p!=="object"||p.v!==1) return null;
-  const items={}; if(p.i&&typeof p.i==="object") for(const [k,v] of Object.entries(p.i).slice(0,200)) if(DB.get(k)&&DB.tableOf(k)!=="recipes"&&DB.tableOf(k)!=="stores"&&Number.isInteger(v)&&v>0) items[k]=clamp(v,1,99);
-  const custom=Array.isArray(p.c)?p.c.slice(0,100).map(c=>Array.isArray(c)&&typeof c[0]==="string"&&c[0].trim()?{id:"c-"+Math.random().toString(36).slice(2,10),name:c[0].replace(/[<>]/g,"").slice(0,60),price:clamp(+c[1]||0,0,500),store:c[2]==="LIDL"?"LIDL":"ALDI",qty:clamp(parseInt(c[3])||1,1,99)}:null).filter(Boolean):[];
+  const items={}, carried=[];
+  if(p.i&&typeof p.i==="object") for(const [k,v] of Object.entries(p.i).slice(0,200)){ if(!Number.isInteger(v)||v<1) continue;
+    if(isListable(k)) items[k]=clamp(v,1,99);
+    else if(p.n&&Array.isArray(p.n[k])&&typeof p.n[k][0]==="string") carried.push([p.n[k][0],p.n[k][1],p.n[k][2],v]); }
+  const storePick={}; if(p.s&&typeof p.s==="object") for(const [k,v] of Object.entries(p.s)) if(DB.tableOf(k)==="staples"&&items[k]&&(v==="ALDI"||v==="LIDL")) storePick[k]=v;
+  const custom=(Array.isArray(p.c)?p.c:[]).concat(carried).slice(0,100).map(c=>Array.isArray(c)&&typeof c[0]==="string"&&c[0].trim()?{id:"c-"+Math.random().toString(36).slice(2,10),name:c[0].replace(/[<>]/g,"").slice(0,60),price:clamp(+c[1]||0,0,500),store:c[2]==="LIDL"?"LIDL":"ALDI",qty:clamp(parseInt(c[3])||1,1,99)}:null).filter(Boolean);
   const menu={}; if(p.m&&typeof p.m==="object") for(const [k,v] of Object.entries(p.m)) if(/^[0-6]$/.test(k)&&DB.tableOf(v)==="recipes") menu[k]=v;
-  return {items,custom,menu,old:p.w!==META.validFrom};
+  return {items,custom,menu,storePick,old:p.w!==META.validFrom};
 }
 function clearHash(){ try{ history.replaceState(null,"",location.pathname+location.search); }catch(e){} }
 function importSheet(imp){
@@ -727,7 +744,7 @@ function drawCook(){
     '</div><div class="cooknav"><button type="button" class="btn ghost" data-act="c-prev"'+(i===0?' disabled':'')+'>'+esc(t("back"))+'</button><button type="button" class="btn go" data-act="'+(last?'close':'c-next')+'" data-autofocus>'+esc(last?t("done"):t("next"))+'</button></div></div>';
   const f=$("#layer").querySelector("[data-autofocus]"); if(f) f.focus();
 }
-function tick(){ if(!cook) return stopTimer(); cook.left--; const tv=$("#tv"); if(tv) tv.textContent=fmtT(cook.left);
+function tick(){ if(!cook) return stopTimer(); if(cook.run&&cook.end) cook.left=Math.max(0,Math.ceil((cook.end-Date.now())/1000)); const tv=$("#tv"); if(tv) tv.textContent=fmtT(cook.left);
   if(cook.left<=0){ stopTimer(); cook.run=false; drawCook(); try{ navigator.vibrate&&navigator.vibrate([300,150,300]); }catch(e){} } }
 
 /* ---------------- render + events ---------------- */
@@ -748,21 +765,21 @@ document.addEventListener("click",e=>{
   switch(act){
     case "add": if(DB.get(id)){ S.items[id]=(S.items[id]||0)+1; save(); render(); toast(t("toast_added")); } break;
     case "inc": if(S.items[id]!=null){ S.items[id]=clamp(S.items[id]+1,1,99); } else { const c=S.custom.find(x=>x.id===id); if(c) c.qty=clamp(c.qty+1,1,99); } save(); render(); break;
-    case "dec": if(S.items[id]!=null){ if(S.items[id]<=1) delete S.items[id]; else S.items[id]--; } else { const i=S.custom.findIndex(x=>x.id===id); if(i>=0){ if(S.custom[i].qty<=1) S.custom.splice(i,1); else S.custom[i].qty--; } } save(); render(); break;
+    case "dec": { let gone=false; if(S.items[id]!=null){ if(S.items[id]<=1){ delete S.items[id]; gone=true; } else S.items[id]--; } else { const i=S.custom.findIndex(x=>x.id===id); if(i>=0){ if(S.custom[i].qty<=1){ S.custom.splice(i,1); gone=true; } else S.custom[i].qty--; } } if(gone) S.checked=S.checked.filter(x=>x!==id); save(); render(); break; }
     case "check": { const i=S.checked.indexOf(id); if(i>=0) S.checked.splice(i,1); else S.checked.push(id); save(); render(); break; }
     case "swap": { const r=DB.get(id); if(r&&!isOffer(r)){ S.storePick[id]=storeOf(r)==="ALDI"?"LIDL":"ALDI"; save(); render(); toast(t("t_moved",{x:S.storePick[id]})); } break; }
     case "clear-done": for(const cid of S.checked){ delete S.items[cid]; S.custom=S.custom.filter(c=>c.id!==cid); } S.checked=[]; save(); render(); toast(t("t_ticked")); break;
-    case "unfav": { const i=+b.dataset.i; if(i>=0&&i<S.favorites.length){ S.favorites.splice(i,1); save(); render(); } break; }
+    case "unfav": { const i=+b.dataset.i; if(i>=0&&i<S.favorites.length){ delete S.favIds[DB.fold(S.favorites[i])]; S.favorites.splice(i,1); save(); render(); } break; }
     case "rebuild": seedFromFavorites(false); S.checked=[]; save(); render(); toast(t("t_rebuilt")); break;
     case "merge": seedFromFavorites(true); save(); render(); toast(t("t_favs")); break;
     case "copy": copyText(listText(), t("t_copied")); break;
     case "add-pick": { const r=DB.get(id); if(r&&(DB.tableOf(id)==="offers"||DB.tableOf(id)==="staples")){ S.items[id]=(S.items[id]||0)+1; save(); render(); toast(t("t_added",{x:r.name})+" · "+storeOf(r)); const inp=$("#addName"); if(inp) inp.focus(); } break; }
-    case "fav-pick": { const r=DB.get(id); if(r&&(DB.tableOf(id)==="offers"||DB.tableOf(id)==="staples")){ if(!S.favorites.some(f=>DB.fold(f)===DB.fold(r.name))&&S.favorites.length<60) S.favorites.push(r.name); if(!S.items[id]) S.items[id]=favQty(r); save(); render(); toast(t("t_added",{x:r.name})); const inp=$("#favIn"); if(inp) inp.focus(); } break; }
+    case "fav-pick": { const r=DB.get(id); if(r&&(DB.tableOf(id)==="offers"||DB.tableOf(id)==="staples")){ if(!S.favorites.some(f=>DB.fold(f)===DB.fold(r.name))&&S.favorites.length<60) S.favorites.push(r.name); S.favIds[DB.fold(r.name)]=id; if(!S.items[id]) S.items[id]=favQty(r); save(); render(); toast(t("t_added",{x:r.name})); const inp=$("#favIn"); if(inp) inp.focus(); } break; }
     case "copy-link": copyText(shareLink(), t("t_link")); break;
     case "share-open": shareSheet(); break;
     case "share-native": { const L=lines(), T=totals(L); try{ navigator.share({title:"Wochenkorb", text:t("share_msg",{n:L.length,total:eur(T.total)}), url:shareLink()}).catch(()=>{}); }catch(err){} break; }
-    case "imp-replace": if(pendingImport){ S.items=pendingImport.items; S.custom=pendingImport.custom; S.menu=pendingImport.menu; S.checked=[]; S.seeded=true; pendingImport=null; clearHash(); save(); closeLayer(); S.tab="list"; render(); toast(t("t_imported")); } break;
-    case "imp-merge": if(pendingImport){ for(const [k,q] of Object.entries(pendingImport.items)) S.items[k]=Math.max(S.items[k]||0,q); for(const c of pendingImport.custom) if(!S.custom.some(x=>DB.fold(x.name)===DB.fold(c.name))&&S.custom.length<100) S.custom.push(c); for(const [d,r] of Object.entries(pendingImport.menu)) if(!S.menu[d]) S.menu[d]=r; S.seeded=true; pendingImport=null; clearHash(); save(); closeLayer(); S.tab="list"; render(); toast(t("t_merged")); } break;
+    case "imp-replace": if(pendingImport){ S.items=pendingImport.items; S.custom=pendingImport.custom; S.menu=pendingImport.menu; S.storePick=Object.assign({},S.storePick,pendingImport.storePick); S.checked=[]; S.seeded=true; pendingImport=null; clearHash(); save(); closeLayer(); S.tab="list"; render(); toast(t("t_imported")); } break;
+    case "imp-merge": if(pendingImport){ for(const [k,q] of Object.entries(pendingImport.items)){ S.items[k]=Math.max(S.items[k]||0,q); S.checked=S.checked.filter(x=>x!==k); } Object.assign(S.storePick,pendingImport.storePick); for(const c of pendingImport.custom) if(!S.custom.some(x=>DB.fold(x.name)===DB.fold(c.name))&&S.custom.length<100) S.custom.push(c); for(const [d,r] of Object.entries(pendingImport.menu)) if(!S.menu[d]) S.menu[d]=r; S.seeded=true; pendingImport=null; clearHash(); save(); closeLayer(); S.tab="list"; render(); toast(t("t_merged")); } break;
     case "imp-ignore": pendingImport=null; clearHash(); closeLayer(); break;
     case "dstore": dealStore=b.dataset.v; render(); break;
     case "dcat": dealCat=b.dataset.v; render(); break;
@@ -780,12 +797,12 @@ document.addEventListener("click",e=>{
     case "close": closeLayer(); render(); break;
     case "c-next": if(cook&&cook.i<cook.r.steps.length-1){ stopTimer(); cook.i++; cook.left=cook.r.steps[cook.i][2]; cook.run=false; cook.started=false; drawCook(); } break;
     case "c-prev": if(cook&&cook.i>0){ stopTimer(); cook.i--; cook.left=cook.r.steps[cook.i][2]; cook.run=false; cook.started=false; drawCook(); } break;
-    case "t-toggle": if(cook){ if(cook.run){ stopTimer(); cook.run=false; } else { if(cook.left<=0) cook.left=cook.r.steps[cook.i][2]; cook.run=true; cook.started=true; timerI=setInterval(tick,1000); } drawCook(); } break;
+    case "t-toggle": if(cook){ if(cook.run){ tick(); stopTimer(); cook.run=false; cook.end=null; } else { if(cook.left<=0) cook.left=cook.r.steps[cook.i][2]; cook.run=true; cook.started=true; cook.end=Date.now()+cook.left*1000; timerI=setInterval(tick,500); } drawCook(); } break;
     case "t-reset": if(cook){ stopTimer(); cook.run=false; cook.started=false; cook.left=cook.r.steps[cook.i][2]; drawCook(); } break;
   }
 });
 function toggleWeek(id){
-  if(DB.tableOf(id)!=="recipes") return;
+  if(DB.tableOf(id)!=="recipes" || DB.get(id).meal!=="Dinner") return;
   const k=Object.keys(S.menu).find(d=>S.menu[d]===id);
   if(k!=null){ delete S.menu[k]; toast(t("t_week_rm")); }
   else { const free=[0,1,2,3,4,5,6].find(d=>!S.menu[d] && !HOLIDAYS[WEEK_DATES[d]]) ?? [0,1,2,3,4,5,6].find(d=>!S.menu[d]);
@@ -812,18 +829,18 @@ document.addEventListener("input",e=>{
 document.addEventListener("change",e=>{
   const el=e.target;
   if(el.id==="dealSort"){ dealSort=["price","cat","name"].includes(el.value)?el.value:"price"; render(); }
-  if(el.id==="bigIn"){ S.big=el.checked; for(const {m} of favMatches()) if(m && S.items[m.row.id]!=null) S.items[m.row.id]=favQty(m.row); save(); render(); toast(S.big?t("t_more"):t("t_normal")); }
+  if(el.id==="bigIn"){ const was=S.big; S.big=el.checked; for(const {m} of favMatches()) if(m && S.items[m.row.id]===favQtyFor(m.row,was)) S.items[m.row.id]=favQtyFor(m.row,S.big); save(); render(); toast(S.big?t("t_more"):t("t_normal")); }
 });
 document.addEventListener("keydown",e=>{
-  if(e.target.id==="favIn" && (e.key==="Enter"||e.key===",")){
-    e.preventDefault(); const v=e.target.value.replace(/[<>]/g,"").trim().slice(0,40);
+  if(e.target.id==="favIn" && e.key==="Enter"){
+    e.preventDefault(); const v=e.target.value.replace(/[<>]/g,"").trim().slice(0,60);
     if(v && !S.favorites.some(f=>DB.fold(f)===DB.fold(v)) && S.favorites.length<60){
       S.favorites.push(v); const m=DB.match(v); if(m && !S.items[m.row.id]) S.items[m.row.id]=favQty(m.row);
       save(); rerenderKeepFocus("favIn"); toast(m?t("t_added",{x:m.row.name}):t("t_noprice",{x:v}));
     }
   }
   if(e.target.id==="addName" && e.key==="Enter"){ e.preventDefault(); const top=suggestRows(e.target.value,1)[0]; if(top){ S.items[top.id]=(S.items[top.id]||0)+1; save(); render(); toast(t("t_added",{x:top.name})+" · "+storeOf(top)); const inp=$("#addName"); if(inp) inp.focus(); } else { const p=$("#addPrice"); if(p) p.focus(); } }
-  if(e.key==="Escape" && $("#layer").innerHTML){ closeLayer(); render(); }
+  if(e.key==="Escape" && $("#layer").innerHTML){ if(pendingImport){ pendingImport=null; clearHash(); } closeLayer(); render(); }
 });
 document.addEventListener("submit",e=>{
   if(e.target.id!=="addForm") return; e.preventDefault();
@@ -838,7 +855,7 @@ document.addEventListener("submit",e=>{
 $("#locBtn").addEventListener("click",()=>{ S.home=S.home==="Bolanden"?"Kaiserslautern":"Bolanden"; save(); render(); toast(t("toast_loc",{x:S.home})); });
 const langBtn=$("#langBtn"); if(langBtn) langBtn.addEventListener("click",()=>{ S.lang=de()?"en":"de"; save(); if(cook) drawCook(); else if($("#layer").innerHTML) closeLayer(); render(); });
 let rz=null; window.addEventListener("resize",()=>{ clearTimeout(rz); rz=setTimeout(()=>{ paintArt(document); if(S.tab==="stores") paintMap(); },150); });
-document.addEventListener("visibilitychange",()=>{ if(document.visibilityState==="visible" && cook) grabWake(); });
+document.addEventListener("visibilitychange",()=>{ if(document.visibilityState==="visible" && cook){ grabWake(); if(cook.run) tick(); } });
 window.addEventListener("online",()=>render()); window.addEventListener("offline",()=>render());
 window.addEventListener("hashchange",()=>{ const imp=readImport(); if(imp) importSheet(imp); });
 if(window.matchMedia){ const mq=window.matchMedia("(prefers-color-scheme: dark)"); if(mq.addEventListener) mq.addEventListener("change",()=>{ if(S.tab==="stores") paintMap(); }); }

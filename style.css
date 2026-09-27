@@ -342,3 +342,5 @@ footer.foot{font-size:12.5px;color:var(--muted);display:flex;flex-direction:colu
 .swapbtn svg{width:14px;height:14px}
 .shop-ALDI .shophead{border-top:5px solid var(--sky)}
 .shop-LIDL .shophead{border-top:5px solid var(--mango)}
+.planned{padding:14px 16px;display:flex;flex-direction:column;gap:8px;background:var(--basil-soft);border-color:transparent}
+.planned b{font-family:var(--display);font-size:18px}
