@@ -1,7 +1,7 @@
 /* Wochenkorb offline support.
    Always tries the network first so new weekly deals show up right away,
    and falls back to the copy saved on the phone when there is no signal. */
-const CACHE = "wochenkorb-v2";
+const CACHE = "wochenkorb-v3";
 const SHELL = ["./", "index.html", "style.css", "app.js", "data.js", "manifest.webmanifest", "icon-192.png", "apple-touch-icon.png"];
 
 self.addEventListener("install", (e) => {

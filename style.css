@@ -323,3 +323,22 @@ footer.foot{font-size:12.5px;color:var(--muted);display:flex;flex-direction:colu
 .sheetbody>.ico{margin-bottom:-6px}
 @media (max-width:430px){.logo{font-size:18px;gap:8px}.logo i{width:32px;height:32px}.topin{gap:8px}.loc{padding:6px 10px 6px 7px;font-size:13px}#langBtn{margin-left:4px;padding:6px 9px}}
 @media (max-width:350px){#locName{display:none}}
+/* v3: suggestions, clearer store columns */
+.addcard{padding:16px 18px;display:flex;flex-direction:column;gap:10px}
+.suggest{display:flex;flex-direction:column;gap:6px}
+.suggest:empty{display:none}
+.sug{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;text-align:left;padding:8px 10px;border-radius:14px;background:var(--surface-2);border:1px solid var(--line);width:100%}
+.sug:active{transform:scale(.99)}
+.sug .ico{width:38px;height:38px;border-radius:11px}
+.sug .ico svg{width:20px;height:20px}
+.sugtxt{display:flex;flex-direction:column;min-width:0}
+.sugtxt b{font-size:14px;line-height:1.25}
+.sugr{display:flex;flex-direction:column;align-items:flex-end;gap:3px}
+.sugnone{font-size:13px;color:var(--muted)}
+.addform[hidden]{display:none}
+.addform{grid-template-columns:1fr auto auto}
+@media (max-width:560px){.addform{grid-template-columns:1fr 1fr}.addform .btn{grid-column:1/-1}}
+.swapbtn{display:inline-flex;align-items:center;gap:4px;margin-top:6px;font-size:12px;font-weight:800;color:var(--muted);padding:3px 8px;border:1px dashed var(--line);border-radius:8px}
+.swapbtn svg{width:14px;height:14px}
+.shop-ALDI .shophead{border-top:5px solid var(--sky)}
+.shop-LIDL .shophead{border-top:5px solid var(--mango)}
