@@ -245,6 +245,7 @@ const STR = {
     nearest:"Nearest stores", all_stores:"All stores",
     hol_is:"{day} {date} is {name}", hol_tail:"Stores are closed that day, so plan your shopping around it.",
     stale:"These deals ended on {date} New deals arrive Monday morning; your list still works with shelf prices.",
+    stale_long:"These deals ended on {date} and have not been refreshed since, so treat every offer price here as out of date. Your list still works with shelf prices.",
     offline:"You're offline. Showing the deals saved on this phone.",
     valid:"valid Mon {from} – Sat {to}", weekly_deals:"Weekly deals", search_ph:"Search: cheese, Käse, pasta, Kaffee…", search_lbl:"Search deals",
     all:"All", sort_price:"Cheapest first", sort_aisle:"By aisle", sort_name:"A–Z", n_deals:"{n} deals", store:"Store", category:"Category",
@@ -306,6 +307,7 @@ const STR = {
     nearest:"Nächste Märkte", all_stores:"Alle Märkte",
     hol_is:"{day} {date} ist {name}", hol_tail:"Die Märkte sind an diesem Tag geschlossen, also Einkauf entsprechend planen.",
     stale:"Diese Angebote endeten am {date} Neue Angebote kommen Montagfrüh; deine Liste funktioniert weiter mit Regalpreisen.",
+    stale_long:"Diese Angebote endeten am {date} und wurden seitdem nicht aktualisiert. Alle Angebotspreise hier sind veraltet. Deine Liste funktioniert weiter mit Regalpreisen.",
     offline:"Du bist offline. Es werden die auf diesem Handy gespeicherten Angebote angezeigt.",
     valid:"gültig Mo {from} – Sa {to}", weekly_deals:"Wochenangebote", search_ph:"Suchen: Käse, Nudeln, Kaffee…", search_lbl:"Angebote suchen",
     all:"Alle", sort_price:"Günstigste zuerst", sort_aisle:"Nach Regal", sort_name:"A–Z", n_deals:"{n} Angebote", store:"Markt", category:"Kategorie",
@@ -396,7 +398,15 @@ function notices(){
   let out="";
   if(typeof navigator!=="undefined" && navigator.onLine===false) out+='<div class="notice info" role="status">'+svg("alert")+'<div>'+esc(t("offline"))+'</div></div>';
   const today=berlinNow().date;
-  if(today>META.validTo) out+='<div class="notice" role="note">'+svg("clock")+'<div>'+esc(t("stale",{date:fmtD(META.validTo)}))+'</div></div>';
+  if(today>META.validTo){
+    // Promising "new deals arrive Monday morning" is only true while the weekly
+    // refresh is actually running. Once the data is more than a fortnight past
+    // its validTo, that line has already been wrong for two Mondays, so say
+    // plainly that the prices are stale instead.
+    const staleDays = Math.round((Date.parse(today) - Date.parse(META.validTo)) / 86400000);
+    const key = staleDays > 14 ? "stale_long" : "stale";
+    out+='<div class="notice" role="note">'+svg("clock")+'<div>'+esc(t(key,{date:fmtD(META.validTo)}))+'</div></div>';
+  }
   const days = Object.entries(HOLIDAYS).filter(([d])=>d>=META.validFrom && d<=META.validTo);
   if(days.length) out+='<div class="notice" role="note">'+svg("alert")+'<div><b>'+esc(days.map(([d,n])=>t("hol_is",{day:dayN((new Date(d+"T12:00:00Z").getUTCDay()+6)%7),date:fmtD(d),name:holN(n)})).join(", "))+'.</b> '+esc(t("hol_tail"))+'</div></div>';
   return out;
