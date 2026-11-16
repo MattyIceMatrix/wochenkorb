@@ -19,5 +19,8 @@ Live site: https://mattyicematrix.github.io/wochenkorb/
 - All text is escaped before rendering; saved browser data is validated on every load.
 - `noindex` so search engines don't list it; `no-referrer` on outgoing links.
 
+## Checked claims
+`python3 tools/check_claims.py` checks the statements above against the files: the Content-Security-Policy, that the page makes no network requests and loads no outside script, the `data.js` shape, and the data week this file names. It runs on every push.
+
 ## Artifact build
 `python3 tools/build_artifact.py` inlines everything into one file for the Claude artifact version.
